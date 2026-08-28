@@ -1,5 +1,8 @@
 #pragma once
 
+#include "llmberry/tensor.h"
+
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 
@@ -10,37 +13,52 @@ Tensor<T>::Tensor(std::vector<size_t> shape) : shape_(std::move(shape)) {
     validate_shape(shape_);
     compute_row_major_strides();
 
-    // TODO: allocate storage_ and set data_/offset_/owns_data_
-    throw std::runtime_error("Tensor constructor not implemented");
+    storage_ = std::make_shared<std::vector<T>>(size());
+    data_ = storage_->data();
+
+    offset_ = 0;
+    owns_data_ = true;
 }
 
 template <typename T>
 Tensor<T>::Tensor(std::vector<size_t> shape,
                   std::vector<size_t> strides,
                   T* data,
-                  size_t offset)
+                  size_t offset,
+                  std::shared_ptr<std::vector<T>> storage)
     : shape_(std::move(shape)),
       strides_(std::move(strides)),
       data_(data),
       offset_(offset),
+      storage_(std::move(storage)),
       owns_data_(false) {
     validate_shape(shape_);
-    // TODO: validate strides_, data_, and offset_
-    throw std::runtime_error("Tensor view constructor not implemented");
+
+    if (strides_.size() != shape_.size()) {
+        throw std::invalid_argument("Strides rank must match shape rank");
+    }
+
+    if (size() > 0 && data_ == nullptr) {
+        throw std::invalid_argument("Tensor data pointer cannot be null");
+    }
 }
 
 template <typename T>
 Tensor<T> Tensor<T>::zeros(std::vector<size_t> shape) {
-    // TODO: construct tensor and fill with 0
-    (void)shape;
-    throw std::runtime_error("Tensor::zeros not implemented");
+    Tensor<T> tensor(std::move(shape));
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor[i] = T{0};
+    }
+    return tensor;
 }
 
 template <typename T>
 Tensor<T> Tensor<T>::ones(std::vector<size_t> shape) {
-    // TODO: construct tensor and fill with 1
-    (void)shape;
-    throw std::runtime_error("Tensor::ones not implemented");
+    Tensor<T> tensor(std::move(shape));
+    for(size_t i=0; i<tensor.size(); i++){
+        tensor[i] = T{1};
+    }
+    return tensor;
 }
 
 template <typename T>
@@ -58,49 +76,61 @@ size_t Tensor<T>::nbytes() const {
 
 template <typename T>
 T* Tensor<T>::data() {
-    // TODO: return pointer to first logical element
-    throw std::runtime_error("Tensor::data not implemented");
+    return data_ + offset_; 
 }
 
 template <typename T>
 const T* Tensor<T>::data() const {
-    // TODO: return pointer to first logical element
-    throw std::runtime_error("Tensor::data not implemented");
+    return data_ + offset_; 
 }
 
 template <typename T>
 T& Tensor<T>::operator[](size_t index) {
-    // TODO: bounds check and return element at flat index
-    (void)index;
-    throw std::runtime_error("Tensor::operator[] not implemented");
+    if (index >= size()) {
+        throw std::out_of_range("index into the tensor is out of range.");
+    }
+    return data()[index];
 }
 
 template <typename T>
 const T& Tensor<T>::operator[](size_t index) const {
-    // TODO: bounds check and return element at flat index
-    (void)index;
-    throw std::runtime_error("Tensor::operator[] not implemented");
+    if (index >= size()) {
+        throw std::out_of_range("index into the tensor is out of range.");
+    }
+    return data()[index];
 }
+
 
 template <typename T>
 T& Tensor<T>::at(const std::vector<size_t>& indices) {
-    // TODO: validate indices and return element
-    (void)indices;
-    throw std::runtime_error("Tensor::at not implemented");
+    validate_indices(indices);
+    return data()[offset_from_indices(indices)];
 }
 
 template <typename T>
 const T& Tensor<T>::at(const std::vector<size_t>& indices) const {
-    // TODO: validate indices and return element
-    (void)indices;
-    throw std::runtime_error("Tensor::at not implemented");
+    validate_indices(indices);
+    return data()[offset_from_indices(indices)];
 }
 
 template <typename T>
 Tensor<T> Tensor<T>::view(std::vector<size_t> new_shape) const {
-    // TODO: return non-owning view sharing this tensor's storage
-    (void)new_shape;
-    throw std::runtime_error("Tensor::view not implemented");
+    validate_shape(new_shape);
+
+    // confirm new shape matches the total size
+    size_t new_size = 1;
+    for (size_t dim : new_shape) {
+        new_size *= dim;
+    }
+    if (new_size != size()) {
+        throw std::invalid_argument("view shape must have the same number of elements");
+    }
+
+    std::vector<size_t> new_strides(new_shape.size(),1);
+    for(auto i= static_cast<int>(new_shape.size())-2; i >= 0; i--){
+        new_strides[i] = new_strides[i+1] * new_shape[i+1];
+    }
+    return Tensor<T>(new_shape, new_strides, data_, offset_, storage_);
 }
 
 template <typename T>
@@ -125,9 +155,11 @@ void Tensor<T>::compute_row_major_strides() {
 
 template <typename T>
 size_t Tensor<T>::offset_from_indices(const std::vector<size_t>& indices) const {
-    // TODO: compute byte/element offset from multi-dimensional indices
-    (void)indices;
-    throw std::runtime_error("Tensor::offset_from_indices not implemented");
+    size_t offset = 0;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        offset += indices[i] * strides_[i];
+    }
+    return offset;
 }
 
 template <typename T>

@@ -2,35 +2,29 @@
 
 A lightweight C++ runtime for LLM inference and decode optimization.
 
-See [project.md](project.md) for the full roadmap.
+| Doc | Purpose |
+|-----|---------|
+| [project.md](project.md) | Full 20-checkpoint roadmap |
+| [PROGRESS.md](PROGRESS.md) | Checkpoint status and benchmark log |
+| [TESTING.md](TESTING.md) | What must pass before each checkpoint is done |
 
-## Build
+## Quick start
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+make setup      # configure + build
+make verify     # build + run all tests
+make test-tensor # tensor tests only
+make run        # llmberry CLI
 ```
 
-## Run tests
+Equivalent scripts: `scripts/setup.sh`, `scripts/verify.sh`, `scripts/benchmark.sh`
 
 ```bash
-ctest --test-dir build --output-on-failure
-```
-
-Or run a single test binary:
-
-```bash
-./build/tests/test_tensor
-```
-
-## Run CLI (scaffold)
-
-```bash
-./build/llmberry
+make help       # list all make targets
 ```
 
 ## Checkpoint 01 — Tensor
 
-Implement the methods marked `TODO` in `include/llmberry/tensor.inl`. Helper methods `validate_shape`, `compute_row_major_strides`, `size`, and `nbytes` are already provided.
+Implement the methods marked `TODO` in `include/llmberry/tensor.inl`.
 
-When your implementation is correct, all tests in `tests/test_tensor.cpp` should pass.
+**Gate:** `make test-tensor` — 16 tests in `tests/test_tensor.cpp` must pass.

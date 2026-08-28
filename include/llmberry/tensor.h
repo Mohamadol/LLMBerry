@@ -23,10 +23,12 @@ public:
     explicit Tensor(std::vector<size_t> shape);
 
     /// Create a tensor that views an existing buffer (does not own memory).
+    /// Pass storage when sharing an owning tensor's buffer; omit for external memory.
     Tensor(std::vector<size_t> shape,
            std::vector<size_t> strides,
            T* data,
-           size_t offset = 0);
+           size_t offset = 0,
+           std::shared_ptr<std::vector<T>> storage = nullptr);
 
     static Tensor<T> zeros(std::vector<size_t> shape);
     static Tensor<T> ones(std::vector<size_t> shape);
