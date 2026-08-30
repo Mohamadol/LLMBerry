@@ -17,6 +17,7 @@ make verify
 | `make test-tensor-construction` | Construction / metadata tests |
 | `make test-tensor-indexing` | Flat and multi-dim indexing |
 | `make test-tensor-views` | View and reshape tests |
+| `make test-matmul` | Checkpoint 02 kernel tests (matmul, gemv, elemwise, reduce, SiLU, GELU) |
 | `make verify` | Build (if needed) + full test suite |
 
 ---
@@ -46,7 +47,16 @@ make verify
 
 ## Checkpoint 02 — CPU Kernels
 
-**Gate:** `test_matmul` passes (replace `GTEST_SKIP` with real tests).
+**Gate:** all tests in `tests/test_matmul.cpp` pass (`make test-matmul`).
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| Matmul | `Matmul.*` | GEMM, shape errors |
+| Gemv | `Gemv.*` | matrix-vector |
+| Elemwise | `Elemwise.*` | add, mul |
+| Dot / reduce | `Dot.*`, `Reduce.*` | dot, sum, mean |
+| SiLU | `Silu.*` | activation |
+| GELU | `Gelu.*` | exact / erf GELU |
 
 **Also:** `python/verify_ops.py` matches NumPy / PyTorch within tolerance.
 

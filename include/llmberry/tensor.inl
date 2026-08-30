@@ -74,6 +74,12 @@ size_t Tensor<T>::nbytes() const {
     return size() * sizeof(T);
 }
 
+
+template <typename T>
+bool Tensor<T>::empty() const {
+    return size()==0;
+}
+
 template <typename T>
 T* Tensor<T>::data() {
     return data_ + offset_; 

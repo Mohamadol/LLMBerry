@@ -19,10 +19,13 @@ add_library(llmberry STATIC
     src/sampling.cpp
     kernels/matmul.cpp
     kernels/gemv.cpp
+    kernels/elemwise.cpp
+    kernels/reduce.cpp
     kernels/rmsnorm.cpp
     kernels/rope.cpp
     kernels/softmax.cpp
     kernels/silu.cpp
+    kernels/gelu.cpp
     kernels/quantized_matmul.cpp
 )
 

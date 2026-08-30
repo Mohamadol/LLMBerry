@@ -32,17 +32,23 @@ Full roadmap: [project.md](project.md)
 
 ## 02 — CPU Kernels
 
-**Status:** Not started
+**Status:** Complete
 
 **Completed:**
-- (none)
+- Naive packed row-major kernels: `matmul`, `gemv`, `add`, `mul`, `dot`, `reduce_sum`, `reduce_mean`, `silu`
+- Extra: exact (erf) `gelu`
+- Shape / rank checks via `ENSURE` (`include/llmberry/ensure.h`)
+- Allocating wrappers for `add`, `mul`, `silu`, `gelu`
+- C++ tests vs independent references (`at()` GEMM, `exp`/`erf` activations)
 
 **Tests:**
-- `test_matmul`: skipped
+- `test_matmul`: 32/32 passing (`make test-matmul`)
+- Later binaries (`test_rmsnorm`, `test_rope`, `test_attention`): still skipped
 
-**Next:**
-- Naive matmul, gemv, elementwise ops, SiLU
-- Validate against NumPy / PyTorch (`python/verify_ops.py`)
+**Notes:**
+- Kernels write into caller-owned outputs (no realloc of `out` / `C`).
+- GEMM/GEMV assume inner stride 1.
+- `python/verify_ops.py` has NumPy helpers; there is no C++ binding yet — gtests are the correctness gate.
 
 ---
 

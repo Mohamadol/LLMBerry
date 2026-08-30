@@ -74,7 +74,7 @@ Tensor<float> x({2, 4, 8});
 
 ---
 
-### [ ] 02 — Basic CPU Kernels
+### [x] 02 — Basic CPU Kernels
 
 Implement naive reference kernels in C++.
 

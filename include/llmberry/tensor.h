@@ -39,6 +39,7 @@ public:
     size_t ndim() const { return shape_.size(); }
     size_t size() const;   // total number of elements
     size_t nbytes() const; // size() * sizeof(T)
+    bool empty() const; // size() == 0 ?
 
     DType dtype() const { return dtype_of<T>(); }
 

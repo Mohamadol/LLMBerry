@@ -5,20 +5,21 @@
 
 namespace llmberry {
 
-void silu(const Tensor<float>& x, Tensor<float>& out) {
+void gelu(const Tensor<float>& x, Tensor<float>& out) {
     ENSURE(!x.empty(), std::invalid_argument, "tensors cannot be empty");
-    ENSURE(out.shape() == x.shape(), std::invalid_argument, "silu requires matching shapes");
+    ENSURE(out.shape() == x.shape(), std::invalid_argument, "gelu requires matching shapes");
 
+    constexpr float inv_sqrt2 = 0.7071067811865476f;  // 1 / sqrt(2)
     for (size_t i = 0; i < x.size(); ++i) {
         const float xi = x[i];
-        out[i] = xi / (1.0f + std::exp(-xi));
+        out[i] = 0.5f * xi * (1.0f + std::erf(xi * inv_sqrt2));
     }
 }
 
-Tensor<float> silu(const Tensor<float>& x) {
+Tensor<float> gelu(const Tensor<float>& x) {
     ENSURE(!x.empty(), std::invalid_argument, "tensors cannot be empty");
     Tensor<float> out(x.shape());
-    silu(x, out);
+    gelu(x, out);
     return out;
 }
 

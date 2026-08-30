@@ -7,10 +7,11 @@ CMAKE       := cmake
 NPROC       := $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 TEST_TENSOR := $(BUILD_DIR)/tests/test_tensor
+TEST_MATMUL := $(BUILD_DIR)/tests/test_matmul
 LLMBERRY    := $(BUILD_DIR)/llmberry
 
 .PHONY: help setup build clean test verify test-tensor test-tensor-construction \
-        test-tensor-indexing test-tensor-views benchmark run
+        test-tensor-indexing test-tensor-views test-matmul benchmark run
 
 help:
 	@echo "LLMBerry commands:"
@@ -22,6 +23,7 @@ help:
 	@echo "  make test-tensor-construction"
 	@echo "  make test-tensor-indexing"
 	@echo "  make test-tensor-views"
+	@echo "  make test-matmul            Run checkpoint 02 kernel tests"
 	@echo "  make benchmark              Run benchmark binaries"
 	@echo "  make run                    Run llmberry CLI"
 	@echo "  make clean                  Remove build directory"
@@ -45,20 +47,25 @@ verify:
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 
 test-tensor:
-	@test -x $(TEST_TENSOR) || $(MAKE) build
+	@$(MAKE) build
 	@$(TEST_TENSOR)
 
 test-tensor-construction:
-	@test -x $(TEST_TENSOR) || $(MAKE) build
+	@$(MAKE) build
 	@$(TEST_TENSOR) --gtest_filter='TensorConstruction.*'
 
 test-tensor-indexing:
-	@test -x $(TEST_TENSOR) || $(MAKE) build
+	@$(MAKE) build
 	@$(TEST_TENSOR) --gtest_filter='TensorIndexing.*:TensorData.*:TensorLayout.*'
 
 test-tensor-views:
-	@test -x $(TEST_TENSOR) || $(MAKE) build
+	@$(MAKE) build
 	@$(TEST_TENSOR) --gtest_filter='TensorView.*'
+
+test-matmul:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
+	@$(CMAKE) --build $(BUILD_DIR) --target test_matmul -j$(NPROC)
+	@$(TEST_MATMUL)
 
 benchmark:
 	@test -x $(BUILD_DIR)/benchmarks/benchmark_matmul || $(MAKE) build
