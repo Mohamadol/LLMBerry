@@ -2,7 +2,9 @@
 
 Track checkpoint status, test results, and benchmark notes here. Update this file when a checkpoint is done or when you record a new benchmark.
 
-Full roadmap: [project.md](project.md)
+Full roadmap: [project.md](project.md). Gates and test filters: [TESTING.md](TESTING.md).
+
+Each checkpoint ends with **Verify** — the commands to run for that case.
 
 ---
 
@@ -28,6 +30,16 @@ Full roadmap: [project.md](project.md)
 - External views do not allocate; caller owns the buffer (`storage` is null).
 - Views from owning tensors pass `storage_` into the view constructor so the buffer stays alive.
 
+**Verify:**
+
+```bash
+make test-tensor
+make test-tensor-construction
+make test-tensor-indexing
+make test-tensor-views
+./build/llmberry
+```
+
 ---
 
 ## 02 — CPU Kernels
@@ -50,6 +62,13 @@ Full roadmap: [project.md](project.md)
 - GEMM/GEMV assume inner stride 1.
 - `python/verify_ops.py` has NumPy helpers; there is no C++ binding yet — gtests are the correctness gate.
 
+**Verify:**
+
+```bash
+make test-matmul
+python3 python/verify_ops.py
+```
+
 ---
 
 ## 03 — Benchmarking Infrastructure
@@ -58,14 +77,261 @@ Full roadmap: [project.md](project.md)
 
 **Notes:**
 - Scaffold exists in `benchmarks/` and `python/benchmark.py`
+- Matmul bench times naive GEMM; `--large` adds `{256, 4096, 4096}` (slow, DRAM-bound)
+
+**Verify:**
+
+```bash
+make build
+
+# human-readable timings (stdout)
+./build/benchmarks/benchmark_matmul
+./build/benchmarks/benchmark_matmul --large
+./build/benchmarks/benchmark_matmul --json
+
+# JSON + plot under results/benchmarks/matmul/
+pip install matplotlib
+python3 python/benchmark.py --plot
+python3 python/plot_results.py
+python3 python/benchmark.py --large --plot
+
+# all C++ benches (matmul default set, no --large / --json; attention/decode stubs)
+make benchmark
+```
+
+Writes `results/benchmarks/matmul/matmul.json` and `results/benchmarks/matmul/matmul.png`.
 
 ---
 
-## Checkpoints 04–20
+## 04 — RMSNorm
 
 **Status:** Not started
 
-See [project.md](project.md) for RMSNorm, RoPE, attention, transformer block, weight loading, generation, KV cache, profiling, optimization, quantization, batching, and paged KV cache.
+**Verify:**
+
+```bash
+make build
+./build/tests/test_rmsnorm
+```
+
+---
+
+## 05 — Rotary Positional Embeddings
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/tests/test_rope
+```
+
+---
+
+## 06 — Attention
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/tests/test_attention
+./build/benchmarks/benchmark_attention
+```
+
+---
+
+## 07 — Grouped-Query Attention
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/tests/test_attention
+```
+
+---
+
+## 08 — SwiGLU MLP
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+make test-matmul
+```
+
+(Add a dedicated MLP test binary when the op exists.)
+
+---
+
+## 09 — Transformer Block
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+# layer-level gtest once added, e.g. ./build/tests/test_transformer
+```
+
+---
+
+## 10 — Load Real Model Weights
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+python3 python/convert_weights.py
+./build/llmberry
+```
+
+---
+
+## 11 — Full Model Forward Pass
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+python3 python/verify_logits.py
+```
+
+---
+
+## 12 — Autoregressive Text Generation
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+make run
+```
+
+---
+
+## 13 — KV Cache
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/benchmarks/benchmark_decode
+```
+
+Compare cached vs uncached decode latency.
+
+---
+
+## 14 — Separate Prefill and Decode
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/benchmarks/benchmark_decode
+```
+
+---
+
+## 15 — Detailed Profiling
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+# profile the decode/prefill binaries from 13–14
+```
+
+---
+
+## 16 — Memory and Allocation Optimization
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/benchmarks/benchmark_decode
+```
+
+---
+
+## 17 — CPU Kernel Optimization
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+make test-matmul
+./build/benchmarks/benchmark_matmul
+./build/benchmarks/benchmark_matmul --large
+```
+
+Compare against the naive numbers in the benchmark log below.
+
+---
+
+## 18 — Weight Quantization
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+python3 python/verify_logits.py
+```
+
+---
+
+## 19 — Batching and Request Scheduling
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+make run
+```
+
+---
+
+## 20 — Paged KV Cache and Final Performance Study
+
+**Status:** Not started
+
+**Verify:**
+
+```bash
+make build
+./build/benchmarks/benchmark_decode
+make benchmark
+```
 
 ---
 

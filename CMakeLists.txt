@@ -45,5 +45,6 @@ if(LLMBERRY_BUILD_TESTS)
 endif()
 
 if(LLMBERRY_BUILD_BENCHMARKS)
+    add_subdirectory(dependencies)
     add_subdirectory(benchmarks)
 endif()

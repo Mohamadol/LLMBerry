@@ -67,8 +67,16 @@ make verify
 **Gate:** benchmark binaries build and produce repeatable timings.
 
 ```bash
+make build
+./build/benchmarks/benchmark_matmul
+./build/benchmarks/benchmark_matmul --large
+./build/benchmarks/benchmark_matmul --json
+python3 python/benchmark.py
+python3 python/plot_results.py
 make benchmark
 ```
+
+`--large` adds `{256, 4096, 4096}`. `--json` prints a JSON array to stdout. `python/benchmark.py --plot` writes `results/benchmarks/matmul/`. `make benchmark` uses the default matmul set (no `--large`).
 
 ---
 

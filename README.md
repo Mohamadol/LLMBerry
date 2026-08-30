@@ -5,17 +5,21 @@ A lightweight C++ runtime for LLM inference and decode optimization.
 | Doc | Purpose |
 |-----|---------|
 | [project.md](project.md) | Full 20-checkpoint roadmap |
-| [PROGRESS.md](PROGRESS.md) | Checkpoint status and benchmark log |
+| [PROGRESS.md](PROGRESS.md) | Checkpoint status, **Verify** commands, benchmark log |
 | [TESTING.md](TESTING.md) | What must pass before each checkpoint is done |
 
 ## Quick start
 
 ```bash
-make setup      # configure + build
-make verify     # build + run all tests
-make test-tensor # tensor tests only
-make run        # llmberry CLI
+make setup       # configure + build
+make verify      # build + run all tests
+make test-tensor # checkpoint 01
+make test-matmul # checkpoint 02
+make benchmark   # checkpoint 03 (matmul default + stubs)
+make run         # llmberry CLI
 ```
+
+Per-checkpoint commands (including `benchmark_matmul --large`) are at the end of each section in [PROGRESS.md](PROGRESS.md).
 
 Equivalent scripts: `scripts/setup.sh`, `scripts/verify.sh`, `scripts/benchmark.sh`
 
