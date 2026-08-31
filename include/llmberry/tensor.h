@@ -58,8 +58,12 @@ public:
     const T& at(const std::vector<size_t>& indices) const;
 
     /// Return a non-owning view with the same underlying storage.
-  /// new_shape must have the same number of elements as this tensor.
+    /// new_shape must have the same number of elements as this tensor.
     Tensor<T> view(std::vector<size_t> new_shape) const;
+
+    /// 1-D view of last-dimension vector `index` (leading dims flattened).
+    /// Requires a contiguous last dimension (last stride == 1).
+    Tensor<T> row(size_t index) const;
 
 private:
     void validate_shape(const std::vector<size_t>& shape) const;

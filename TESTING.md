@@ -18,13 +18,14 @@ make verify
 | `make test-tensor-indexing` | Flat and multi-dim indexing |
 | `make test-tensor-views` | View and reshape tests |
 | `make test-matmul` | Checkpoint 02 kernel tests (matmul, gemv, elemwise, reduce, SiLU, GELU) |
+| `make test-rmsnorm` | Checkpoint 04 RMSNorm tests |
 | `make verify` | Build (if needed) + full test suite |
 
 ---
 
 ## Checkpoint 01 — Tensor
 
-**Gate:** all tests in `tests/test_tensor.cpp` pass (16 tests).
+**Gate:** all tests in `tests/test_tensor.cpp` pass (19 tests).
 
 | Group | Filter | Count | Covers |
 |-------|--------|-------|--------|
@@ -34,7 +35,7 @@ make verify
 | Flat indexing | `TensorIndexing.Flat*` | 2 | `operator[]`, bounds |
 | Multi-dim | `TensorIndexing.At*` | 4 | `at()`, rank / bounds errors |
 | Data pointer | `TensorData.*` | 1 | `data()` row-major layout |
-| Views | `TensorView.*` | 3 | reshape view, invalid reshape, external buffer |
+| Views | `TensorView.*` | 5 | reshape view, `row()` slice, invalid reshape, external buffer |
 | Layout | `TensorLayout.*` | 1 | row-major linearization |
 
 **Manual smoke test:**
@@ -80,11 +81,32 @@ make benchmark
 
 ---
 
-## Checkpoints 04–07
+## Checkpoint 04 — RMSNorm
+
+**Gate:** all tests in `tests/test_rmsnorm.cpp` pass (`make test-rmsnorm`).
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| Known values | `RMSNorm.OnesWeightConstantVector`, `ZeroInputIsZero` | hand-checkable output |
+| Weight / layout | `WeightScales*`, `LastDim*` | per-row last-dim reduction, affine scale |
+| Reference | `MatchesIndependentReference` | 1-D / 2-D / 3-D vs C++ ref |
+| Contract | `Overwrites*`, `LeavesInputs*`, `AllocatingWrapper` | in-place out, no input mutation |
+| Stability | `DefaultEpsMatchesLlama`, `SmallValuesStayFinite` | eps=1e-6, no NaN on tiny x |
+| Errors | `ShapeMismatchThrows`, `EmptyThrows` | weight rank/size, out shape |
+
+**Also:** `python/verify_ops.py` `rmsnorm()` matches NumPy / Hugging Face LlamaRMSNorm.
+
+```bash
+make test-rmsnorm
+python3 python/verify_ops.py
+```
+
+---
+
+## Checkpoints 05–07
 
 | Checkpoint | Test binary | Gate |
 |------------|-------------|------|
-| 04 RMSNorm | `test_rmsnorm` | matches PyTorch reference |
 | 05 RoPE | `test_rope` | matches Python reference |
 | 06 Attention | `test_attention` | matches PyTorch |
 | 07 GQA | `test_attention` (extended) | GQA head layout correct |

@@ -123,7 +123,7 @@ Throughput:     2.7 GFLOP/s
 
 ---
 
-### [ ] 04 — RMSNorm
+### [x] 04 — RMSNorm
 
 Implement the RMSNorm operation used by Llama models.
 

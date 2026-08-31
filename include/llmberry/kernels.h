@@ -43,4 +43,19 @@ Tensor<float> silu(const Tensor<float>& x);
 void gelu(const Tensor<float>& x, Tensor<float>& out);
 Tensor<float> gelu(const Tensor<float>& x);
 
+/// RMSNorm over the last dimension (Llama / Phase 1 checkpoint 04).
+///
+///   y = x / sqrt(mean(x^2) + eps)  ⊙  weight
+///
+/// `x` and `out` have shape [..., D]; `weight` is [D]. Each vector along the
+/// last axis is normalized independently, then scaled by `weight`.
+/// Default `eps` matches Hugging Face LlamaRMSNorm (1e-6).
+void rmsnorm(const Tensor<float>& x,
+             const Tensor<float>& weight,
+             Tensor<float>& out,
+             float eps = 1e-6f);
+Tensor<float> rmsnorm(const Tensor<float>& x,
+                      const Tensor<float>& weight,
+                      float eps = 1e-6f);
+
 }  // namespace llmberry

@@ -192,6 +192,31 @@ TEST(TensorView, ReshapeSharesStorage) {
     EXPECT_FLOAT_EQ(x.at({1, 5}), 99.0f);
 }
 
+TEST(TensorView, RowSliceSharesStorage) {
+    Tensor<float> x({2, 3});
+    for (size_t i = 0; i < x.size(); ++i) {
+        x[i] = static_cast<float>(i + 1);
+    }
+
+    Tensor<float> r0 = x.row(0);
+    Tensor<float> r1 = x.row(1);
+
+    EXPECT_EQ(r0.shape(), std::vector<size_t>({3}));
+    EXPECT_TRUE(r0.is_view());
+    EXPECT_FLOAT_EQ(r0[0], 1.0f);
+    EXPECT_FLOAT_EQ(r0[2], 3.0f);
+    EXPECT_FLOAT_EQ(r1[0], 4.0f);
+    EXPECT_FLOAT_EQ(r1[2], 6.0f);
+
+    r1[1] = 99.0f;
+    EXPECT_FLOAT_EQ(x.at({1, 1}), 99.0f);
+}
+
+TEST(TensorView, RowOutOfRangeThrows) {
+    Tensor<float> x({2, 3});
+    EXPECT_THROW(x.row(2), std::out_of_range);
+}
+
 TEST(TensorView, InvalidReshapeThrows) {
     Tensor<float> x({2, 6});
     EXPECT_THROW(x.view({2, 5}), std::invalid_argument);

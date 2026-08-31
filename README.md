@@ -13,9 +13,10 @@ A lightweight C++ runtime for LLM inference and decode optimization.
 ```bash
 make setup       # configure + build
 make verify      # build + run all tests
-make test-tensor # checkpoint 01
-make test-matmul # checkpoint 02
-make benchmark   # checkpoint 03 (matmul default + stubs)
+make test-tensor  # checkpoint 01
+make test-matmul  # checkpoint 02
+make benchmark    # checkpoint 03 (matmul default + stubs)
+make test-rmsnorm # checkpoint 04
 make run         # llmberry CLI
 ```
 
@@ -31,4 +32,4 @@ make help       # list all make targets
 
 Implement the methods marked `TODO` in `include/llmberry/tensor.inl`.
 
-**Gate:** `make test-tensor` — 16 tests in `tests/test_tensor.cpp` must pass.
+**Gate:** `make test-tensor` — 19 tests in `tests/test_tensor.cpp` must pass.

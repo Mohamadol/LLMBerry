@@ -140,6 +140,24 @@ Tensor<T> Tensor<T>::view(std::vector<size_t> new_shape) const {
 }
 
 template <typename T>
+Tensor<T> Tensor<T>::row(size_t index) const {
+    if (shape_.empty()) {
+        throw std::invalid_argument("row() requires a non-empty tensor");
+    }
+    if (strides_.back() != 1) {
+        throw std::invalid_argument("row() requires a contiguous last dimension");
+    }
+
+    const size_t dim = shape_.back();
+    const size_t n_rows = size() / dim;
+    if (index >= n_rows) {
+        throw std::out_of_range("row index out of range");
+    }
+
+    return Tensor<T>({dim}, {1}, data_, offset_ + index * dim, storage_);
+}
+
+template <typename T>
 void Tensor<T>::validate_shape(const std::vector<size_t>& shape) const {
     for (size_t dim : shape) {
         if (dim == 0) {

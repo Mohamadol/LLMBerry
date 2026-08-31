@@ -20,10 +20,10 @@ Each checkpoint ends with **Verify** — the commands to run for that case.
 - Flat indexing (`operator[]`) and multi-dim indexing (`at`)
 - `offset_from_indices`, `validate_shape`, `compute_row_major_strides`, `validate_indices`
 - `view()` reshape sharing storage
+- `row(i)` — 1-D view of last-dimension vector `i` (contiguous last dim)
 
 **Tests:**
-- `test_tensor`: 17/17 passing (`make test-tensor`)
-- Other test binaries: skipped (not implemented yet)
+- `test_tensor`: 19/19 passing (`make test-tensor`)
 
 **Notes:**
 - Owning tensors use `std::shared_ptr<std::vector<T>>` for RAII.
@@ -55,7 +55,7 @@ make test-tensor-views
 
 **Tests:**
 - `test_matmul`: 32/32 passing (`make test-matmul`)
-- Later binaries (`test_rmsnorm`, `test_rope`, `test_attention`): still skipped
+- Later binaries (`test_rope`, `test_attention`): still skipped
 
 **Notes:**
 - Kernels write into caller-owned outputs (no realloc of `out` / `C`).
@@ -105,13 +105,28 @@ Writes `results/benchmarks/matmul/matmul.json` and `results/benchmarks/matmul/ma
 
 ## 04 — RMSNorm
 
-**Status:** Not started
+**Status:** Complete
+
+**Completed:**
+- Llama RMSNorm over the last dim: `y = x / sqrt(mean(x^2) + eps) ⊙ weight`
+- In-place `rmsnorm(x, weight, out, eps=1e-6)` plus allocating wrapper
+- Shape / rank checks; last-dim row views via `Tensor::row`
+- Numerical stability: `eps` added before `sqrt`; zero and tiny inputs stay finite
+- C++ tests vs independent last-dim reference; NumPy/HF reference in `python/verify_ops.py`
+
+**Tests:**
+- `test_rmsnorm`: 13/13 passing (`make test-rmsnorm`)
+
+**Notes:**
+- Default `eps` matches Hugging Face LlamaRMSNorm (`1e-6`).
+- Each leading-dim vector is normalized independently, then scaled by 1-D `weight`.
+- Scale/write uses `std::transform` over contiguous row pointers.
 
 **Verify:**
 
 ```bash
-make build
-./build/tests/test_rmsnorm
+make test-rmsnorm
+python3 python/verify_ops.py
 ```
 
 ---
