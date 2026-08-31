@@ -17,6 +17,7 @@ make test-tensor  # checkpoint 01
 make test-matmul  # checkpoint 02
 make benchmark    # checkpoint 03 (matmul default + stubs)
 make test-rmsnorm # checkpoint 04
+make test-rope    # checkpoint 05
 make run         # llmberry CLI
 ```
 

@@ -9,10 +9,11 @@ NPROC       := $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 TEST_TENSOR  := $(BUILD_DIR)/tests/test_tensor
 TEST_MATMUL  := $(BUILD_DIR)/tests/test_matmul
 TEST_RMSNORM := $(BUILD_DIR)/tests/test_rmsnorm
+TEST_ROPE    := $(BUILD_DIR)/tests/test_rope
 LLMBERRY     := $(BUILD_DIR)/llmberry
 
 .PHONY: help setup build clean test verify test-tensor test-tensor-construction \
-        test-tensor-indexing test-tensor-views test-matmul test-rmsnorm \
+        test-tensor-indexing test-tensor-views test-matmul test-rmsnorm test-rope \
         benchmark run
 
 help:
@@ -27,6 +28,7 @@ help:
 	@echo "  make test-tensor-views"
 	@echo "  make test-matmul            Run checkpoint 02 kernel tests"
 	@echo "  make test-rmsnorm           Run checkpoint 04 RMSNorm tests"
+	@echo "  make test-rope              Run checkpoint 05 RoPE tests"
 	@echo "  make benchmark              Run benchmark binaries"
 	@echo "  make run                    Run llmberry CLI"
 	@echo "  make clean                  Remove build directory"
@@ -74,6 +76,11 @@ test-rmsnorm:
 	@test -d $(BUILD_DIR) || $(MAKE) setup
 	@$(CMAKE) --build $(BUILD_DIR) --target test_rmsnorm -j$(NPROC)
 	@$(TEST_RMSNORM)
+
+test-rope:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
+	@$(CMAKE) --build $(BUILD_DIR) --target test_rope -j$(NPROC)
+	@$(TEST_ROPE)
 
 benchmark:
 	@test -x $(BUILD_DIR)/benchmarks/benchmark_matmul || $(MAKE) build

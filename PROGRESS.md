@@ -55,7 +55,7 @@ make test-tensor-views
 
 **Tests:**
 - `test_matmul`: 32/32 passing (`make test-matmul`)
-- Later binaries (`test_rope`, `test_attention`): still skipped
+- Later binaries (`test_attention`): still skipped
 
 **Notes:**
 - Kernels write into caller-owned outputs (no realloc of `out` / `C`).
@@ -133,13 +133,27 @@ python3 python/verify_ops.py
 
 ## 05 — Rotary Positional Embeddings
 
-**Status:** Not started
+**Status:** Scaffold ready — implement frequencies, sincos tables, and apply
+
+**Scaffold:**
+- API: `rope_freqs`, `rope_sincos`, `rope` in `include/llmberry/kernels.h`
+- Stub + shape checks: `kernels/rope.cpp` (throws `logic_error` until filled in)
+- Sequential `rope_sincos` and convenience `rope(x, out, offset)` are glue — they call the three TODOs
+- Tests: `tests/test_rope.cpp` (independent C++ reference, Llama / GPT-NeoX `rotate_half`)
+- Python ref: `python/verify_ops.py` `rope_freqs()`, `rope_sincos()`, `rope()`
+
+**Implement** (delete each `throw` in `kernels/rope.cpp`):
+1. `rope_freqs` — `inv_freq[i] = 1 / theta^(2i / dim)`
+2. `rope_sincos(inv_freq, positions, cos, sin)` — concat(freqs, freqs) then cos/sin
+3. `rope(x, cos, sin, out)` — `y = x * cos + rotate_half(x) * sin`
+
+Layout: `x` is `[seq, ..., head_dim]` (dim 0 = sequence, last dim even). Decode: seq=1 with `position_offset` = cache length. Default theta = 10000.
 
 **Verify:**
 
 ```bash
-make build
-./build/tests/test_rope
+make test-rope
+python3 python/verify_ops.py
 ```
 
 ---

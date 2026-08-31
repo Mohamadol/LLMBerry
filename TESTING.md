@@ -19,6 +19,7 @@ make verify
 | `make test-tensor-views` | View and reshape tests |
 | `make test-matmul` | Checkpoint 02 kernel tests (matmul, gemv, elemwise, reduce, SiLU, GELU) |
 | `make test-rmsnorm` | Checkpoint 04 RMSNorm tests |
+| `make test-rope` | Checkpoint 05 RoPE tests |
 | `make verify` | Build (if needed) + full test suite |
 
 ---
@@ -103,11 +104,34 @@ python3 python/verify_ops.py
 
 ---
 
-## Checkpoints 05–07
+## Checkpoint 05 — RoPE
+
+**Gate:** all tests in `tests/test_rope.cpp` pass (`make test-rope`).
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| Frequencies | `RoPEFreqs.*` | `inv_freq[i] = 1 / theta^(2i/dim)`, Llama-3 theta, odd dim |
+| Sin/cos tables | `RoPESinCos.*` | position 0 identity, concat layout, unit circle |
+| Known values | `RoPE.PositionZeroIsIdentity`, `KnownRotationDim2` | hand-checkable rotation |
+| Invariants | `PreservesNorm`, `HeadsSharePosition` | orthogonal rotation, broadcast over heads |
+| Reference | `MatchesIndependentReference`, `PositionOffset`, `ArbitraryPositions` | Llama/NeoX apply, decode offset |
+| Contract | `Overwrites*`, `LeavesInputs*`, `AllocatingWrapper`, `DefaultThetaIs10000` | in-place out, theta=10000 |
+| Layout | `ContiguousReshapeView` | view sharing storage |
+| Errors | `ShapeMismatchThrows`, `EmptyThrows`, `OddHeadDimThrows` | rank, shapes, odd head_dim |
+
+**Also:** `python/verify_ops.py` `rope()` / `rope_freqs()` / `rope_sincos()` match Hugging Face Llama (rotate_half).
+
+```bash
+make test-rope
+python3 python/verify_ops.py
+```
+
+---
+
+## Checkpoints 06–07
 
 | Checkpoint | Test binary | Gate |
 |------------|-------------|------|
-| 05 RoPE | `test_rope` | matches Python reference |
 | 06 Attention | `test_attention` | matches PyTorch |
 | 07 GQA | `test_attention` (extended) | GQA head layout correct |
 
