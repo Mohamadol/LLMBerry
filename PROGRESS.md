@@ -55,11 +55,10 @@ make test-tensor-views
 
 **Tests:**
 - `test_matmul`: 32/32 passing (`make test-matmul`)
-- Later binaries (`test_attention`): still skipped
 
 **Notes:**
 - Kernels write into caller-owned outputs (no realloc of `out` / `C`).
-- GEMM/GEMV assume inner stride 1.
+- GEMV assumes inner stride 1. `matmul` uses both strides (supports a transposed `B`).
 - `python/verify_ops.py` has NumPy helpers; there is no C++ binding yet — gtests are the correctness gate.
 
 **Verify:**
@@ -160,14 +159,31 @@ python3 python/verify_ops.py
 
 ## 06 — Attention
 
-**Status:** Not started
+**Status:** Complete
+
+**Completed:**
+- Numerically stable last-dim `softmax` (`kernels/softmax.cpp`)
+- Scaled dot-product attention: QK → `1/sqrt(d)` → optional causal mask → softmax → AV
+- `attention_qk` / `attention_av` via per-head `matrix(h)` + `matmul` (`Kᵀ` is a stride view)
+- Causal mask: PyTorch `is_causal` bottom-right (`-inf` when `j + seq_q > i + seq_k`)
+- Tensor helpers: `transpose()` (last two dims, no copy), `matrix(i)` (2-D plane view)
+- `matmul` indexes with `strides[0]` and `strides[1]` so transposed `B` is valid
+- C++ tests vs independent SDPA reference; NumPy/PyTorch ref in `python/verify_ops.py`
+
+**Tests:**
+- `test_attention`: 36/36 passing (`make test-attention`)
+
+**Notes:**
+- Layout is `[..., seq, dim]` (2-D single head, 3-D `[n_heads, seq, d]`, 4-D batched).
+- Default scale is `1/sqrt(head_dim)` (Llama). `scale < 0` selects that default.
+- Glue allocates `scores` and `weights`; no KV cache yet (checkpoint 13).
+- GQA (`n_q != n_kv`) is checkpoint 07.
 
 **Verify:**
 
 ```bash
-make build
-./build/tests/test_attention
-./build/benchmarks/benchmark_attention
+make test-attention
+python3 python/verify_ops.py
 ```
 
 ---

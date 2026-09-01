@@ -1,5 +1,6 @@
 #pragma once
 
+#include "llmberry/attention.h"
 #include "llmberry/kernels.h"
 #include "llmberry/tensor.h"
 

@@ -158,6 +158,43 @@ Tensor<T> Tensor<T>::row(size_t index) const {
 }
 
 template <typename T>
+Tensor<T> Tensor<T>::matrix(size_t index) const {
+    if (shape_.empty()) {
+        throw std::invalid_argument("matrix() requires a non-empty tensor");
+    }
+
+    if (ndim() < 2) {
+        throw std::invalid_argument("matrix() requires at least 2D");
+    }
+
+    const size_t rows = shape_[ndim() - 2];
+    const size_t cols = shape_[ndim() - 1];
+    const size_t n_matrices = size() / (rows * cols);
+    if (index >= n_matrices) {
+        throw std::out_of_range("matrix index out of range");
+    }
+    const size_t plane_stride = (ndim() >= 3) ? strides_[ndim() - 3] : 0;
+    return Tensor<T>(
+        {rows, cols}, // view's shape
+        {strides_[ndim() - 2], strides_[ndim() - 1]}, // view's strides
+        data_,
+        offset_ + index * plane_stride,
+        storage_);
+}
+
+template <typename T>
+Tensor<T> Tensor<T>::transpose() const {
+    if (ndim() < 2) {
+        throw std::invalid_argument("transpose() requires rank >= 2");
+    }
+    auto shape = shape_;
+    auto strides = strides_;
+    std::swap(shape[ndim() - 2], shape[ndim() - 1]);
+    std::swap(strides[ndim() - 2], strides[ndim() - 1]);
+    return Tensor<T>(std::move(shape), std::move(strides), data_, offset_, storage_);
+}
+
+template <typename T>
 void Tensor<T>::validate_shape(const std::vector<size_t>& shape) const {
     for (size_t dim : shape) {
         if (dim == 0) {

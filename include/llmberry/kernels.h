@@ -118,4 +118,14 @@ Tensor<float> rope(const Tensor<float>& x,
                    size_t position_offset = 0,
                    float theta = 10000.0f);
 
+/// Numerically stable softmax over the last dimension (Phase 1 checkpoint 06).
+///
+///   m = max(x[..., :])
+///   y = exp(x - m) / sum(exp(x - m))
+///
+/// `x` and `out` have matching shape [..., D]. Each vector along the last
+/// axis is normalized independently so that it sums to 1.
+/// A `-inf` logit becomes probability 0 (used by causal attention masks).
+void softmax(const Tensor<float>& x, Tensor<float>& out);
+Tensor<float> softmax(const Tensor<float>& x);
 }  // namespace llmberry

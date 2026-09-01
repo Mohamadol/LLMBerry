@@ -3,18 +3,20 @@
 
 BUILD_DIR   := build
 BUILD_TYPE  ?= Release
+GENERATOR   ?= Unix Makefiles
 CMAKE       := cmake
 NPROC       := $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
-TEST_TENSOR  := $(BUILD_DIR)/tests/test_tensor
-TEST_MATMUL  := $(BUILD_DIR)/tests/test_matmul
-TEST_RMSNORM := $(BUILD_DIR)/tests/test_rmsnorm
-TEST_ROPE    := $(BUILD_DIR)/tests/test_rope
-LLMBERRY     := $(BUILD_DIR)/llmberry
+TEST_TENSOR     := $(BUILD_DIR)/tests/test_tensor
+TEST_MATMUL     := $(BUILD_DIR)/tests/test_matmul
+TEST_RMSNORM    := $(BUILD_DIR)/tests/test_rmsnorm
+TEST_ROPE       := $(BUILD_DIR)/tests/test_rope
+TEST_ATTENTION  := $(BUILD_DIR)/tests/test_attention
+LLMBERRY        := $(BUILD_DIR)/llmberry
 
 .PHONY: help setup build clean test verify test-tensor test-tensor-construction \
         test-tensor-indexing test-tensor-views test-matmul test-rmsnorm test-rope \
-        benchmark run
+        test-attention benchmark run
 
 help:
 	@echo "LLMBerry commands:"
@@ -29,15 +31,17 @@ help:
 	@echo "  make test-matmul            Run checkpoint 02 kernel tests"
 	@echo "  make test-rmsnorm           Run checkpoint 04 RMSNorm tests"
 	@echo "  make test-rope              Run checkpoint 05 RoPE tests"
+	@echo "  make test-attention         Run checkpoint 06 attention tests"
 	@echo "  make benchmark              Run benchmark binaries"
 	@echo "  make run                    Run llmberry CLI"
 	@echo "  make clean                  Remove build directory"
 
 setup:
-	@$(CMAKE) -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+	@$(CMAKE) -B $(BUILD_DIR) -G "$(GENERATOR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 	@$(CMAKE) --build $(BUILD_DIR) -j$(NPROC)
 
 build:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
 	@$(CMAKE) --build $(BUILD_DIR) -j$(NPROC)
 
 clean:
@@ -47,7 +51,7 @@ test:
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 
 verify:
-	@$(CMAKE) -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) 2>/dev/null || true
+	@$(CMAKE) -B $(BUILD_DIR) -G "$(GENERATOR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 	@$(CMAKE) --build $(BUILD_DIR) -j$(NPROC)
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 
@@ -81,6 +85,11 @@ test-rope:
 	@test -d $(BUILD_DIR) || $(MAKE) setup
 	@$(CMAKE) --build $(BUILD_DIR) --target test_rope -j$(NPROC)
 	@$(TEST_ROPE)
+
+test-attention:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
+	@$(CMAKE) --build $(BUILD_DIR) --target test_attention -j$(NPROC)
+	@$(TEST_ATTENTION)
 
 benchmark:
 	@test -x $(BUILD_DIR)/benchmarks/benchmark_matmul || $(MAKE) build

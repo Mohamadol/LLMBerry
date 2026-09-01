@@ -65,6 +65,13 @@ public:
     /// Requires a contiguous last dimension (last stride == 1).
     Tensor<T> row(size_t index) const;
 
+     /// 2-D view in a multi-dimensional tensor
+    Tensor<T> matrix(size_t index) const;
+
+    /// needs at least 2D, transposes the last 2 dimensions
+    Tensor<T> transpose() const;
+
+
 private:
     void validate_shape(const std::vector<size_t>& shape) const;
     void compute_row_major_strides();

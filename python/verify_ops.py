@@ -1,4 +1,4 @@
-"""Validate C++ kernels against NumPy / PyTorch references (checkpoints 02, 04, 05).
+"""Validate C++ kernels against NumPy / PyTorch references (checkpoints 02, 04, 05, 06).
 
 Fill in a comparison path once kernels are implemented (golden files from
 C++ tests, or a small binding). Until then these functions are the numeric
@@ -108,6 +108,42 @@ def rope(
     return x * cos.reshape(bcast) + rotate_half(x) * sin.reshape(bcast)
 
 
+def softmax(x: np.ndarray) -> np.ndarray:
+    """Numerically stable softmax over the last axis. Matches C++ `softmax`."""
+    x = np.asarray(x, dtype=np.float32)
+    m = np.max(x, axis=-1, keepdims=True)
+    e = np.exp(x - m)
+    return e / np.sum(e, axis=-1, keepdims=True)
+
+
+def attention(
+    q: np.ndarray,
+    k: np.ndarray,
+    v: np.ndarray,
+    causal: bool = True,
+    scale: float | None = None,
+) -> np.ndarray:
+    """Scaled dot-product attention. Matches PyTorch `F.scaled_dot_product_attention`.
+
+    q: [..., seq_q, d], k: [..., seq_k, d], v: [..., seq_k, d_v]
+    Causal mask is bottom-right aligned (decode seq_q=1 sees every key).
+    """
+    q = np.asarray(q, dtype=np.float32)
+    k = np.asarray(k, dtype=np.float32)
+    v = np.asarray(v, dtype=np.float32)
+    d = q.shape[-1]
+    if scale is None:
+        scale = 1.0 / np.sqrt(np.float32(d))
+    scores = np.matmul(q, np.swapaxes(k, -1, -2)) * np.float32(scale)
+    if causal:
+        seq_q, seq_k = q.shape[-2], k.shape[-2]
+        q_idx = np.arange(seq_q)[:, None]
+        k_idx = np.arange(seq_k)[None, :]
+        mask = k_idx > (q_idx + seq_k - seq_q)
+        scores = np.where(mask, np.float32(-np.inf), scores)
+    return np.matmul(softmax(scores), v)
+
+
 def main() -> None:
     a = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
     b = np.arange(1, 7, dtype=np.float32).reshape(3, 2)
@@ -120,6 +156,11 @@ def main() -> None:
     q = np.arange(1, 9, dtype=np.float32).reshape(2, 4)
     print("rope freqs dim=4:\n", rope_freqs(4))
     print("rope ref:\n", rope(q))
+
+    logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    print("softmax ref:\n", softmax(logits))
+    qkv = np.arange(1, 9, dtype=np.float32).reshape(2, 4)
+    print("attention ref:\n", attention(qkv, qkv, qkv, causal=True))
     print("C++ comparison not wired yet")
 
 

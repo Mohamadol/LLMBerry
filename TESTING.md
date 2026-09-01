@@ -20,6 +20,7 @@ make verify
 | `make test-matmul` | Checkpoint 02 kernel tests (matmul, gemv, elemwise, reduce, SiLU, GELU) |
 | `make test-rmsnorm` | Checkpoint 04 RMSNorm tests |
 | `make test-rope` | Checkpoint 05 RoPE tests |
+| `make test-attention` | Checkpoint 06 attention tests (softmax + SDPA) |
 | `make verify` | Build (if needed) + full test suite |
 
 ---
@@ -128,11 +129,38 @@ python3 python/verify_ops.py
 
 ---
 
-## Checkpoints 06–07
+## Checkpoint 06 — Attention
+
+**Gate:** all tests in `tests/test_attention.cpp` pass (`make test-attention`).
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| Softmax known values | `Softmax.KnownValues1D`, `UniformWhenEqual`, `NegInfBecomesZero` | hand-checkable output, causal `-inf` |
+| Softmax invariants | `SumsToOne`, `NumericallyStableLargeValues`, `LastDimIndependent` | last-dim, no overflow |
+| Softmax reference | `Softmax.MatchesIndependentReference` | 1-D / 2-D / 3-D / 4-D vs C++ ref |
+| Softmax contract | `Overwrites*`, `LeavesInput*`, `AllocatingWrapper` | in-place out, no input mutation |
+| Softmax errors | `ShapeMismatchThrows`, `EmptyThrows` | out shape, empty |
+| QK^T | `AttentionQK.*` | `Q @ K^T`, multi-head, shape errors |
+| Causal mask | `AttentionMask.*` | lower-triangular, decode, bottom-right, heads |
+| Attention × V | `AttentionAV.*` | one-hot gather, batched GEMM, shape errors |
+| SDPA | `Attention.CausalLowerTriangular*`, `NonCausalDiffers*`, `MultiHead*` | causal, heads independent |
+| SDPA reference | `MatchesIndependentReference`, `DecodeSingleQuery`, `CustomScale`, `DefaultScale*` | PyTorch SDPA, `1/sqrt(d)` |
+| SDPA contract | `Overwrites*`, `LeavesInputs*`, `AllocatingWrapper`, `ScaleHelper`, `ContiguousReshapeView` | glue, views |
+| SDPA errors | `ShapeMismatchThrows`, `EmptyThrows` | rank, d mismatch, empty |
+
+Shape / empty tests pass on the scaffold (checks run before the TODOs). Compute tests fail with `logic_error` until you fill in the four `throw`s.
+
+**Also:** `python/verify_ops.py` `softmax()` / `attention()` match NumPy / PyTorch SDPA.
+
+```bash
+make test-attention
+python3 python/verify_ops.py
+```
+
+## Checkpoint 07
 
 | Checkpoint | Test binary | Gate |
 |------------|-------------|------|
-| 06 Attention | `test_attention` | matches PyTorch |
 | 07 GQA | `test_attention` (extended) | GQA head layout correct |
 
 ---
