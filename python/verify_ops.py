@@ -1,13 +1,18 @@
-"""Validate C++ kernels against NumPy / PyTorch references (checkpoints 02, 04, 05, 06).
+"""Validate C++ kernels against NumPy (and PyTorch if installed).
 
-Fill in a comparison path once kernels are implemented (golden files from
-C++ tests, or a small binding). Until then these functions are the numeric
-reference for the naive CPU ops.
+Runs `build/tests/dump_ops`, which prints JSON of C++ inputs + outputs.
+This script recomputes each op with NumPy from those same inputs and checks
+allclose. Optional: the same check with PyTorch.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import math
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -149,25 +154,263 @@ def attention(
     return np.matmul(softmax(scores), v)
 
 
-def main() -> None:
-    a = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
-    b = np.arange(1, 7, dtype=np.float32).reshape(3, 2)
-    print("matmul ref:\n", matmul(a, b))
+def mlp(
+    x: np.ndarray,
+    w_gate: np.ndarray,
+    w_up: np.ndarray,
+    w_down: np.ndarray,
+) -> np.ndarray:
+    """Llama SwiGLU MLP. Matches C++ `mlp` (compute-native weight layout).
 
-    x = np.arange(1, 9, dtype=np.float32).reshape(2, 4)
-    w = np.ones(4, dtype=np.float32)
-    print("rmsnorm ref:\n", rmsnorm(x, w))
+    x:      [..., hidden]
+    w_gate: [hidden, intermediate]
+    w_up:   [hidden, intermediate]
+    w_down: [intermediate, hidden]
 
-    q = np.arange(1, 9, dtype=np.float32).reshape(2, 4)
-    print("rope freqs dim=4:\n", rope_freqs(4))
-    print("rope ref:\n", rope(q))
+    Hugging Face Linear stores [out, in]; pass W.T:
+      mlp(x, gate.weight.T, up.weight.T, down.weight.T)
+    """
+    x = np.asarray(x, dtype=np.float32)
+    w_gate = np.asarray(w_gate, dtype=np.float32)
+    w_up = np.asarray(w_up, dtype=np.float32)
+    w_down = np.asarray(w_down, dtype=np.float32)
+    hidden = silu(x @ w_gate) * (x @ w_up)
+    return hidden @ w_down
 
-    logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    print("softmax ref:\n", softmax(logits))
-    qkv = np.arange(1, 9, dtype=np.float32).reshape(2, 4)
-    print("attention ref:\n", attention(qkv, qkv, qkv, causal=True))
-    print("C++ comparison not wired yet")
+
+def tensor_from_json(obj: dict) -> np.ndarray:
+    return np.asarray(obj["data"], dtype=np.float32).reshape(obj["shape"])
+
+
+def inputs_from_json(op: dict) -> dict[str, np.ndarray]:
+    return {name: tensor_from_json(t) for name, t in op.get("inputs", {}).items()}
+
+
+def numpy_ref(op: dict):
+    name = op["name"]
+    inp = inputs_from_json(op)
+    attrs = op.get("attrs", {})
+    if name == "matmul":
+        return matmul(inp["a"], inp["b"])
+    if name == "gemv":
+        return gemv(inp["a"], inp["x"])
+    if name == "add":
+        return add(inp["a"], inp["b"])
+    if name == "mul":
+        return mul(inp["a"], inp["b"])
+    if name == "dot":
+        return dot(inp["a"], inp["b"])
+    if name == "reduce_sum":
+        return reduce_sum(inp["x"])
+    if name == "reduce_mean":
+        return reduce_mean(inp["x"])
+    if name == "silu":
+        return silu(inp["x"])
+    if name == "gelu":
+        return gelu(inp["x"])
+    if name == "rmsnorm":
+        return rmsnorm(inp["x"], inp["weight"], float(attrs.get("eps", 1e-6)))
+    if name == "rope_freqs":
+        return rope_freqs(int(attrs["dim"]), float(attrs["theta"]))
+    if name == "rope_sincos":
+        return rope_sincos(
+            int(attrs["seq_len"]),
+            int(attrs["dim"]),
+            int(attrs.get("position_offset", 0)),
+            float(attrs.get("theta", 10000.0)),
+        )
+    if name == "rope":
+        return rope(
+            inp["x"],
+            int(attrs.get("position_offset", 0)),
+            float(attrs.get("theta", 10000.0)),
+        )
+    if name == "softmax":
+        return softmax(inp["x"])
+    if name in ("attention", "attention_gqa"):
+        return attention(
+            inp["q"],
+            inp["k"],
+            inp["v"],
+            causal=bool(attrs.get("causal", True)),
+        )
+    if name in ("mlp", "mlp_batched"):
+        return mlp(inp["x"], inp["w_gate"], inp["w_up"], inp["w_down"])
+    raise KeyError(f"unknown op {name}")
+
+
+def torch_ref(op: dict):
+    import torch
+    import torch.nn.functional as F
+
+    name = op["name"]
+    inp = {k: torch.from_numpy(v.copy()) for k, v in inputs_from_json(op).items()}
+    attrs = op.get("attrs", {})
+
+    if name == "matmul":
+        return (inp["a"] @ inp["b"]).numpy()
+    if name == "gemv":
+        return (inp["a"] @ inp["x"]).numpy()
+    if name == "add":
+        return (inp["a"] + inp["b"]).numpy()
+    if name == "mul":
+        return (inp["a"] * inp["b"]).numpy()
+    if name == "dot":
+        return float(torch.dot(inp["a"].reshape(-1), inp["b"].reshape(-1)))
+    if name == "reduce_sum":
+        return float(inp["x"].sum())
+    if name == "reduce_mean":
+        return float(inp["x"].mean())
+    if name == "silu":
+        return F.silu(inp["x"]).numpy()
+    if name == "gelu":
+        return F.gelu(inp["x"], approximate="none").numpy()
+    if name == "rmsnorm":
+        x, w = inp["x"], inp["weight"]
+        eps = float(attrs.get("eps", 1e-6))
+        if hasattr(F, "rms_norm"):
+            return F.rms_norm(x, (x.shape[-1],), w, eps).numpy()
+        var = x.pow(2).mean(dim=-1, keepdim=True)
+        return (x * torch.rsqrt(var + eps) * w).numpy()
+    if name == "softmax":
+        return F.softmax(inp["x"], dim=-1).numpy()
+    if name in ("attention", "attention_gqa"):
+        q, k, v = inp["q"], inp["k"], inp["v"]
+        if q.ndim >= 3 and q.shape[-3] != k.shape[-3]:
+            n_q, n_kv = q.shape[-3], k.shape[-3]
+            k = k.repeat_interleave(n_q // n_kv, dim=-3)
+            v = v.repeat_interleave(n_q // n_kv, dim=-3)
+        squeeze_batch = q.ndim == 2
+        if squeeze_batch:
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=bool(attrs.get("causal", True)))
+        if squeeze_batch:
+            y = y.squeeze(0)
+        return y.numpy()
+    if name in ("mlp", "mlp_batched"):
+        x, wg, wu, wd = inp["x"], inp["w_gate"], inp["w_up"], inp["w_down"]
+        h = F.silu(x @ wg) * (x @ wu)
+        return (h @ wd).numpy()
+    if name in ("rope", "rope_freqs", "rope_sincos"):
+        return None  # no torch.nn RoPE; NumPy matches HF rotate_half
+    raise KeyError(f"unknown op {name}")
+
+
+def cpp_output(op: dict):
+    if "value" in op:
+        return float(op["value"])
+    if "outputs" in op:
+        return {k: tensor_from_json(v) for k, v in op["outputs"].items()}
+    return tensor_from_json(op["output"])
+
+
+def allclose(got, want, atol: float, rtol: float) -> tuple[bool, str]:
+    if isinstance(want, tuple):
+        if not isinstance(got, dict) or got.keys() != {"cos", "sin"}:
+            return False, f"expected cos/sin dict, got {type(got)}"
+        ok_c = np.allclose(got["cos"], want[0], atol=atol, rtol=rtol)
+        ok_s = np.allclose(got["sin"], want[1], atol=atol, rtol=rtol)
+        if ok_c and ok_s:
+            return True, ""
+        err = max(
+            float(np.max(np.abs(got["cos"] - want[0]))),
+            float(np.max(np.abs(got["sin"] - want[1]))),
+        )
+        return False, f"max abs err {err:.3e}"
+    if isinstance(want, float):
+        if not math.isclose(float(got), want, abs_tol=atol, rel_tol=rtol):
+            return False, f"cpp={got!r} numpy={want!r}"
+        return True, ""
+    got_a = np.asarray(got, dtype=np.float32)
+    want_a = np.asarray(want, dtype=np.float32)
+    if got_a.shape != want_a.shape:
+        return False, f"shape cpp {got_a.shape} vs numpy {want_a.shape}"
+    if np.allclose(got_a, want_a, atol=atol, rtol=rtol, equal_nan=True):
+        return True, ""
+    err = float(np.max(np.abs(got_a - want_a)))
+    return False, f"max abs err {err:.3e}"
+
+
+def default_dump_bin(root: Path) -> Path:
+    return root / "build" / "tests" / "dump_ops"
+
+
+def load_cpp_dump(bin_path: Path) -> dict:
+    if not bin_path.is_file():
+        raise FileNotFoundError(
+            f"dump_ops not found at {bin_path}. Build it with: cmake --build build --target dump_ops"
+        )
+    proc = subprocess.run([str(bin_path)], check=True, capture_output=True, text=True)
+    return json.loads(proc.stdout)
+
+
+def compare_ops(dump: dict, atol: float, rtol: float, use_torch: bool) -> int:
+    failed = 0
+    torch_mod = None
+    if use_torch:
+        try:
+            import torch  # noqa: F401
+
+            torch_mod = True
+        except ImportError:
+            print("PyTorch not installed — skipping C++ vs PyTorch")
+
+    for op in dump["ops"]:
+        name = op["name"]
+        cpp = cpp_output(op)
+        np_want = numpy_ref(op)
+        ok, msg = allclose(cpp, np_want, atol, rtol)
+        status = "PASS" if ok else "FAIL"
+        extra = f"  {msg}" if msg else ""
+        print(f"  [{status}] {name:16}  C++ vs NumPy{extra}")
+        if not ok:
+            failed += 1
+            if not isinstance(np_want, (float, tuple)):
+                print("    numpy:\n", np_want)
+                print("    cpp:\n", cpp)
+
+        if torch_mod:
+            try:
+                th_want = torch_ref(op)
+            except KeyError:
+                th_want = None
+            if th_want is None:
+                print(f"  [SKIP] {name:16}  PyTorch (no ref)")
+                continue
+            ok_t, msg_t = allclose(cpp, th_want, atol, rtol)
+            st = "PASS" if ok_t else "FAIL"
+            extra_t = f"  {msg_t}" if msg_t else ""
+            print(f"  [{st}] {name:16}  C++ vs PyTorch{extra_t}")
+            if not ok_t:
+                failed += 1
+
+    return failed
+
+
+def main() -> int:
+    root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(description="Compare dump_ops C++ JSON against NumPy / PyTorch.")
+    parser.add_argument(
+        "--bin",
+        type=Path,
+        default=None,
+        help="Path to dump_ops (default: build/tests/dump_ops)",
+    )
+    parser.add_argument("--atol", type=float, default=1e-5)
+    parser.add_argument("--rtol", type=float, default=1e-5)
+    parser.add_argument("--no-torch", action="store_true", help="Do not try PyTorch")
+    args = parser.parse_args()
+    bin_path = args.bin if args.bin is not None else default_dump_bin(root)
+
+    dump = load_cpp_dump(bin_path)
+    print(f"dump_ops: {bin_path}  ({len(dump['ops'])} ops)")
+    failed = compare_ops(dump, args.atol, args.rtol, use_torch=not args.no_torch)
+    if failed:
+        print(f"\n{failed} comparison(s) failed")
+        return 1
+    print("\nAll comparisons passed")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -12,11 +12,13 @@ TEST_MATMUL     := $(BUILD_DIR)/tests/test_matmul
 TEST_RMSNORM    := $(BUILD_DIR)/tests/test_rmsnorm
 TEST_ROPE       := $(BUILD_DIR)/tests/test_rope
 TEST_ATTENTION  := $(BUILD_DIR)/tests/test_attention
+TEST_MLP        := $(BUILD_DIR)/tests/test_mlp
+DUMP_OPS        := $(BUILD_DIR)/tests/dump_ops
 LLMBERRY        := $(BUILD_DIR)/llmberry
 
 .PHONY: help setup build clean test verify test-tensor test-tensor-construction \
         test-tensor-indexing test-tensor-views test-matmul test-rmsnorm test-rope \
-        test-attention benchmark run
+        test-attention test-mlp verify-ops benchmark run
 
 help:
 	@echo "LLMBerry commands:"
@@ -32,6 +34,8 @@ help:
 	@echo "  make test-rmsnorm           Run checkpoint 04 RMSNorm tests"
 	@echo "  make test-rope              Run checkpoint 05 RoPE tests"
 	@echo "  make test-attention         Run checkpoint 06 attention tests"
+	@echo "  make test-mlp               Run checkpoint 08 SwiGLU MLP tests"
+	@echo "  make verify-ops             C++ dump_ops vs NumPy (and PyTorch if installed)"
 	@echo "  make benchmark              Run benchmark binaries"
 	@echo "  make run                    Run llmberry CLI"
 	@echo "  make clean                  Remove build directory"
@@ -90,6 +94,16 @@ test-attention:
 	@test -d $(BUILD_DIR) || $(MAKE) setup
 	@$(CMAKE) --build $(BUILD_DIR) --target test_attention -j$(NPROC)
 	@$(TEST_ATTENTION)
+
+test-mlp:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
+	@$(CMAKE) --build $(BUILD_DIR) --target test_mlp -j$(NPROC)
+	@$(TEST_MLP)
+
+verify-ops:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
+	@$(CMAKE) --build $(BUILD_DIR) --target dump_ops -j$(NPROC)
+	@python3 python/verify_ops.py --bin $(DUMP_OPS)
 
 benchmark:
 	@test -x $(BUILD_DIR)/benchmarks/benchmark_matmul || $(MAKE) build

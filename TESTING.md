@@ -21,7 +21,9 @@ make verify
 | `make test-rmsnorm` | Checkpoint 04 RMSNorm tests |
 | `make test-rope` | Checkpoint 05 RoPE tests |
 | `make test-attention` | Checkpoint 06–07 attention tests (softmax + SDPA + GQA) |
-| `make verify` | Build (if needed) + full test suite |
+| `make test-mlp` | Checkpoint 08 SwiGLU MLP tests |
+| `make verify-ops` | C++ `dump_ops` vs NumPy (PyTorch too if installed) |
+| `make verify` | Build (if needed) + full test suite (includes `verify_ops`) |
 
 ---
 
@@ -61,7 +63,7 @@ make verify
 | SiLU | `Silu.*` | activation |
 | GELU | `Gelu.*` | exact / erf GELU |
 
-**Also:** `python/verify_ops.py` matches NumPy / PyTorch within tolerance.
+**Also:** `python/verify_ops.py` runs `dump_ops` and checks C++ vs NumPy (and PyTorch if installed).
 
 ---
 
@@ -174,6 +176,29 @@ python3 python/verify_ops.py
 
 ```bash
 make test-attention
+python3 python/verify_ops.py
+```
+
+---
+
+## Checkpoint 08 — SwiGLU MLP
+
+**Gate:** all tests in `tests/test_mlp.cpp` pass (`make test-mlp`).
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| Known values | `MLP.KnownValuesTiny` | hand-checkable SiLU + projections |
+| Algebra | `ZeroGateIsZero`, `ZeroDownIsZero` | SiLU(0)·up = 0; down = 0 |
+| Token independence | `PrefillEqualsPerTokenDecode` | `[seq, H]` ≡ per-row `[H]` |
+| Reference | `MatchesIndependentReference` | 1-D / 2-D / 3-D vs C++ ref, `I ≠ kH` |
+| Contract | `Overwrites*`, `LeavesInputs*`, `AllocatingWrapper` | in-place out, no input mutation |
+| Layout | `ContiguousReshapeView` | view sharing storage |
+| Errors | `ShapeMismatchThrows`, `EmptyThrows` | ranks, `[H,I]` / `[I,H]`, empty |
+
+**Also:** `python/verify_ops.py` `mlp()` matches NumPy; HF Linear weights are `[out, in]` — pass `W.T`. `dump_ops` includes `mlp` and `mlp_batched`.
+
+```bash
+make test-mlp
 python3 python/verify_ops.py
 ```
 

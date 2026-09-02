@@ -144,7 +144,7 @@ Tasks:
 
 ---
 
-### [ ] 05 — Rotary Positional Embeddings
+### [x] 05 — Rotary Positional Embeddings
 
 Implement Rotary Positional Embeddings (RoPE).
 
@@ -217,7 +217,7 @@ Study the effect of GQA on KV-cache memory requirements.
 
 ---
 
-### [ ] 08 — SwiGLU MLP
+### [x] 08 — SwiGLU MLP
 
 Implement the Llama feed-forward network.
 
@@ -869,7 +869,9 @@ LLMBerry/
 │   ├── test_matmul.cpp
 │   ├── test_rmsnorm.cpp
 │   ├── test_rope.cpp
-│   └── test_attention.cpp
+│   ├── test_attention.cpp
+│   ├── test_mlp.cpp
+│   └── dump_ops.cpp
 │
 ├── benchmarks/
 │   ├── benchmark_matmul.cpp

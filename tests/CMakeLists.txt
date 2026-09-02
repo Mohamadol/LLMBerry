@@ -20,3 +20,18 @@ llmberry_add_test(test_matmul)
 llmberry_add_test(test_rmsnorm)
 llmberry_add_test(test_rope)
 llmberry_add_test(test_attention)
+llmberry_add_test(test_mlp)
+
+# JSON dump of kernel outputs for python/verify_ops.py (not a gtest).
+add_executable(dump_ops dump_ops.cpp)
+target_link_libraries(dump_ops PRIVATE llmberry)
+
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME verify_ops
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/python/verify_ops.py
+                --bin $<TARGET_FILE:dump_ops>
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+endif()

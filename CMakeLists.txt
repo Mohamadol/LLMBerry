@@ -14,6 +14,7 @@ add_library(llmberry STATIC
     src/model.cpp
     src/transformer.cpp
     src/attention.cpp
+    src/mlp.cpp
     src/kv_cache.cpp
     src/scheduler.cpp
     src/sampling.cpp

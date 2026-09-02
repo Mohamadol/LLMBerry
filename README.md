@@ -18,7 +18,9 @@ make test-matmul  # checkpoint 02
 make benchmark    # checkpoint 03 (matmul default + stubs)
 make test-rmsnorm # checkpoint 04
 make test-rope    # checkpoint 05
-make test-attention # checkpoint 06
+make test-attention # checkpoint 06–07
+make test-mlp       # checkpoint 08
+make verify-ops     # C++ vs NumPy (dump_ops)
 make run         # llmberry CLI
 ```
 

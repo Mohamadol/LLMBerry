@@ -59,7 +59,7 @@ make test-tensor-views
 **Notes:**
 - Kernels write into caller-owned outputs (no realloc of `out` / `C`).
 - GEMV assumes inner stride 1. `matmul` uses both strides (supports a transposed `B`).
-- `python/verify_ops.py` has NumPy helpers; there is no C++ binding yet — gtests are the correctness gate.
+- `python/verify_ops.py` runs `dump_ops` and compares C++ outputs to NumPy (and PyTorch if installed).
 
 **Verify:**
 
@@ -235,22 +235,21 @@ python3 python/verify_ops.py
 
 ## 08 — SwiGLU MLP
 
-**Status:** Scaffold ready — implement SwiGLU glue (`silu(x @ W_g) * (x @ W_u)` then `@ W_d`)
+**Status:** Complete
 
-**Scaffold:**
-- API: `mlp` in `include/llmberry/mlp.h`
-- Stub + shape checks: `src/mlp.cpp` (throws `logic_error` until filled in)
-- Allocating wrapper is glue — it calls the in-place `mlp`
-- Tests: `tests/test_mlp.cpp` (independent C++ reference, token-wise dots)
-- Python ref: `python/verify_ops.py` `mlp()`
+**Completed:**
+- Llama SwiGLU: `h = SiLU(x @ W_g) ⊙ (x @ W_u)`, then `y = h @ W_d` (no bias)
+- Flatten `[..., hidden]` to `[tokens, hidden]` so decode, prefill, and batch share one GEMM path
+- Glue calls existing `matmul`, `silu`, and `mul`; in-place `mlp` plus allocating wrapper
+- C++ tests vs independent per-token dots; `dump_ops` + `python/verify_ops.py` compares C++ vs NumPy (and PyTorch if installed)
 
-**Implement** (delete the `throw` in `src/mlp.cpp`):
-1. Flatten `x` / `out` to `[tokens, hidden]` (`view`)
-2. `gate = x @ w_gate`, `up = x @ w_up` (`matmul`)
-3. `h = silu(gate) * up` (`silu`, `mul`)
-4. `out = h @ w_down` (`matmul`)
+**Tests:**
+- `test_mlp`: 11/11 passing (`make test-mlp`)
 
-Layout: `w_gate` / `w_up` are `[hidden, intermediate]`, `w_down` is `[intermediate, hidden]`. No bias. Decode: `x` shape `[hidden]` or `[1, hidden]`.
+**Notes:**
+- Compute-native weights: `w_gate` / `w_up` are `[hidden, intermediate]`, `w_down` is `[intermediate, hidden]`. Hugging Face Linear is `[out, in]` — transpose once at load (checkpoint 10).
+- MLP does not split heads. Last dim is the residual stream (`hidden = n_heads × head_dim`).
+- Tokens are independent: `[seq, H]` matches per-row `[H]` (prefill ≡ decode).
 
 **Verify:**
 
