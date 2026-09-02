@@ -177,7 +177,7 @@ python3 python/verify_ops.py
 - Layout is `[..., seq, dim]` (2-D single head, 3-D `[n_heads, seq, d]`, 4-D batched).
 - Default scale is `1/sqrt(head_dim)` (Llama). `scale < 0` selects that default.
 - Glue allocates `scores` and `weights`; no KV cache yet (checkpoint 13).
-- GQA (`n_q != n_kv`) is checkpoint 07.
+- GQA (`n_q != n_kv`) added in checkpoint 07.
 
 **Verify:**
 
@@ -190,13 +190,43 @@ python3 python/verify_ops.py
 
 ## 07 — Grouped-Query Attention
 
-**Status:** Not started
+**Status:** Complete
+
+**Completed:**
+- Attention accepts `n_q >= n_kv` when `n_q % n_kv == 0` (MHA, GQA, and MQA on one path)
+- Query head `h` uses KV head `h / (n_q / n_kv)`; batch is split out of the flat `matrix(h)` index
+- K and V must share leading dims (including `n_kv`); scores/output follow Q's head count
+- Tests vs repeat-interleave K/V then the MHA reference; prefill (`seq_q == seq_k`) and decode (`seq_q == 1` against a K/V prefix)
+- `python/verify_ops.py` `attention()` repeats K/V heads when `n_q != n_kv`
+
+**Tests:**
+- `test_attention`: 63/63 passing (`make test-attention`)
+
+**Notes:**
+- Layout unchanged: `[n_heads, seq, d]` or `[batch, n_heads, seq, d]`. Head dim is `shape[-3]`.
+- No KV cache yet (checkpoint 13). Decode tests simulate a cache with `seq_q=1` and a growing K/V prefix.
+
+**KV-cache memory (study, no cache implementation):**
+
+```text
+KV bytes = n_layers × n_kv × seq × head_dim × 2 × sizeof(dtype)
+```
+
+GQA stores `n_kv` heads instead of `n_q`, so cache size shrinks by `n_q / n_kv`. Compute is almost unchanged: Q still has `n_q` heads; only K and V are smaller.
+
+| Config | Q heads | KV heads | KV vs MHA |
+| ------ | ------: | -------: | --------- |
+| MHA    |      32 |       32 |      1.00× |
+| GQA    |      32 |        8 |      0.25× |
+| MQA    |      32 |        1 |     0.031× |
+
+Llama 3 8B is the GQA row (32 / 8 = **4×** less KV memory). At long context the cache dominates activations, so that factor is the main win; decode still reads the full Q/O/MLP weights every token.
 
 **Verify:**
 
 ```bash
-make build
-./build/tests/test_attention
+make test-attention
+python3 python/verify_ops.py
 ```
 
 ---

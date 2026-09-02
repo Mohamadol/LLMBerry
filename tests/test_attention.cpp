@@ -158,6 +158,113 @@ void copy_head(const Tensor<float>& src, size_t h, Tensor<float>& dst) {
     }
 }
 
+size_t n_heads_of(const Tensor<float>& t) {
+    return (t.ndim() >= 3) ? t.shape()[t.ndim() - 3] : 1;
+}
+
+/// Repeat-interleave KV heads along the head axis so GQA becomes MHA.
+/// Rank 3: [n_kv, seq, d] -> [n_q, seq, d]
+/// Rank 4: [B, n_kv, seq, d] -> [B, n_q, seq, d]
+Tensor<float> expand_kv_heads(const Tensor<float>& kv, size_t n_q) {
+    if (kv.ndim() < 3) {
+        Tensor<float> out(kv.shape());
+        copy_tensor(kv, out);
+        return out;
+    }
+
+    std::vector<size_t> shape = kv.shape();
+    const size_t n_kv = shape[kv.ndim() - 3];
+    const size_t group = n_q / n_kv;
+    shape[kv.ndim() - 3] = n_q;
+    Tensor<float> out(shape);
+
+    const size_t seq = kv.shape()[kv.ndim() - 2];
+    const size_t d = kv.shape().back();
+
+    if (kv.ndim() == 3) {
+        for (size_t kv_h = 0; kv_h < n_kv; ++kv_h) {
+            for (size_t g = 0; g < group; ++g) {
+                const size_t q_h = kv_h * group + g;
+                for (size_t i = 0; i < seq; ++i) {
+                    for (size_t t = 0; t < d; ++t) {
+                        out.at({q_h, i, t}) = kv.at({kv_h, i, t});
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    if (kv.ndim() != 4) {
+        ADD_FAILURE() << "expand_kv_heads: expected rank 3 or 4, got " << kv.ndim();
+        return out;
+    }
+    const size_t batch = kv.shape()[0];
+    for (size_t b = 0; b < batch; ++b) {
+        for (size_t kv_h = 0; kv_h < n_kv; ++kv_h) {
+            for (size_t g = 0; g < group; ++g) {
+                const size_t q_h = kv_h * group + g;
+                for (size_t i = 0; i < seq; ++i) {
+                    for (size_t t = 0; t < d; ++t) {
+                        out.at({b, q_h, i, t}) = kv.at({b, kv_h, i, t});
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
+void attention_gqa_ref(const Tensor<float>& q,
+                       const Tensor<float>& k,
+                       const Tensor<float>& v,
+                       Tensor<float>& out,
+                       bool causal = true,
+                       float scale = -1.0f) {
+    const size_t n_q = n_heads_of(q);
+    Tensor<float> k_exp = expand_kv_heads(k, n_q);
+    Tensor<float> v_exp = expand_kv_heads(v, n_q);
+    attention_ref(q, k_exp, v_exp, out, causal, scale);
+}
+
+void copy_seq_prefix(const Tensor<float>& src, Tensor<float>& dst) {
+    const size_t seq_dst = dst.shape()[dst.ndim() - 2];
+    const size_t d = dst.shape().back();
+    ASSERT_EQ(src.shape().back(), d);
+    ASSERT_GE(src.shape()[src.ndim() - 2], seq_dst);
+    const size_t n = dst.size() / (seq_dst * d);
+    ASSERT_EQ(n, src.size() / (src.shape()[src.ndim() - 2] * d));
+    for (size_t h = 0; h < n; ++h) {
+        Tensor<float> s = src.matrix(h);
+        Tensor<float> o = dst.matrix(h);
+        for (size_t i = 0; i < seq_dst; ++i) {
+            for (size_t t = 0; t < d; ++t) {
+                o.at({i, t}) = s.at({i, t});
+            }
+        }
+    }
+}
+
+void copy_query_at(const Tensor<float>& src, size_t pos, Tensor<float>& dst) {
+    ASSERT_EQ(dst.shape()[dst.ndim() - 2], 1u);
+    const size_t d = src.shape().back();
+    ASSERT_EQ(dst.shape().back(), d);
+    const size_t n = dst.size() / d;
+    ASSERT_EQ(n, src.size() / (src.shape()[src.ndim() - 2] * d));
+    for (size_t h = 0; h < n; ++h) {
+        Tensor<float> s = src.matrix(h);
+        Tensor<float> o = dst.matrix(h);
+        for (size_t t = 0; t < d; ++t) {
+            o.at({0, t}) = s.at({pos, t});
+        }
+    }
+}
+
+std::vector<size_t> with_seq(std::vector<size_t> shape, size_t seq) {
+    shape[shape.size() - 2] = seq;
+    return shape;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -756,4 +863,554 @@ TEST(Attention, EmptyThrows) {
     Tensor<float> out({2, 4});
     EXPECT_THROW(attention(q, k, v, out), std::invalid_argument);
     EXPECT_THROW(attention(q, k, v), std::invalid_argument);
+}
+
+// ---------------------------------------------------------------------------
+// Prefill vs decode (MHA) — no KV cache; decode is seq_q=1 against a prefix
+// ---------------------------------------------------------------------------
+
+TEST(Attention, PrefillLastRowEqualsDecode) {
+    const size_t seq = 6;
+    const size_t d = 4;
+    Tensor<float> q({seq, d});
+    Tensor<float> k({seq, d});
+    Tensor<float> v({seq, d});
+    Tensor<float> prefill({seq, d});
+    fill_pattern(q);
+    fill_iota(k, 0.25f);
+    fill_iota(v, -1.0f);
+
+    attention(q, k, v, prefill, /*causal=*/true);
+
+    Tensor<float> q_dec({1, d});
+    Tensor<float> got({1, d});
+    copy_query_at(q, seq - 1, q_dec);
+    attention(q_dec, k, v, got, /*causal=*/true);
+
+    for (size_t t = 0; t < d; ++t) {
+        EXPECT_NEAR(got.at({0, t}), prefill.at({seq - 1, t}), 2e-5f);
+    }
+}
+
+TEST(Attention, PrefillEveryPositionEqualsDecode) {
+    const size_t seq = 5;
+    const size_t d = 8;
+    Tensor<float> q({2, seq, d});
+    Tensor<float> k({2, seq, d});
+    Tensor<float> v({2, seq, d});
+    Tensor<float> prefill({2, seq, d});
+    fill_iota(q, 0.1f);
+    fill_pattern(k);
+    fill_iota(v, -0.4f);
+
+    attention(q, k, v, prefill, /*causal=*/true);
+
+    for (size_t pos = 0; pos < seq; ++pos) {
+        Tensor<float> q_dec({2, 1, d});
+        Tensor<float> k_pref({2, pos + 1, d});
+        Tensor<float> v_pref({2, pos + 1, d});
+        Tensor<float> got({2, 1, d});
+        copy_query_at(q, pos, q_dec);
+        copy_seq_prefix(k, k_pref);
+        copy_seq_prefix(v, v_pref);
+        attention(q_dec, k_pref, v_pref, got, /*causal=*/true);
+        for (size_t h = 0; h < 2; ++h) {
+            for (size_t t = 0; t < d; ++t) {
+                EXPECT_NEAR(got.at({h, 0, t}), prefill.at({h, pos, t}), 2e-5f)
+                    << "h=" << h << " pos=" << pos;
+            }
+        }
+    }
+}
+
+TEST(Attention, DecodeCausalEqualsNonCausal) {
+    Tensor<float> q({3, 1, 4});
+    Tensor<float> k({3, 7, 4});
+    Tensor<float> v({3, 7, 4});
+    Tensor<float> causal({3, 1, 4});
+    Tensor<float> full({3, 1, 4});
+    fill_pattern(q);
+    fill_iota(k, -0.5f);
+    fill_iota(v, 1.25f);
+
+    attention(q, k, v, causal, /*causal=*/true);
+    attention(q, k, v, full, /*causal=*/false);
+    expect_allclose(causal, full, 2e-5f);
+}
+
+TEST(Attention, ChunkPrefillBottomRight) {
+    // Queries for the last 2 tokens of a 5-token context.
+    Tensor<float> q_full({5, 4});
+    Tensor<float> k({5, 4});
+    Tensor<float> v({5, 4});
+    Tensor<float> prefill({5, 4});
+    fill_iota(q_full, 0.2f);
+    fill_pattern(k);
+    fill_iota(v, -0.8f);
+    attention(q_full, k, v, prefill, /*causal=*/true);
+
+    Tensor<float> q_chunk({2, 4});
+    Tensor<float> got({2, 4});
+    for (size_t i = 0; i < 2; ++i) {
+        for (size_t t = 0; t < 4; ++t) {
+            q_chunk.at({i, t}) = q_full.at({3 + i, t});
+        }
+    }
+    attention(q_chunk, k, v, got, /*causal=*/true);
+    for (size_t i = 0; i < 2; ++i) {
+        for (size_t t = 0; t < 4; ++t) {
+            EXPECT_NEAR(got.at({i, t}), prefill.at({3 + i, t}), 2e-5f);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Grouped-query attention
+// ---------------------------------------------------------------------------
+
+TEST(AttentionQK, GqaRepeatsKvHeads) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({2, 5, 4});
+    Tensor<float> got({8, 3, 5});
+    Tensor<float> want({8, 3, 5});
+    fill_pattern(q);
+    fill_iota(k, -0.5f);
+
+    attention_qk(q, k, got);
+    Tensor<float> k_exp = expand_kv_heads(k, 8);
+    attention_qk_ref(q, k_exp, want);
+    expect_allclose(got, want);
+}
+
+TEST(AttentionQK, GqaBatched) {
+    Tensor<float> q({2, 8, 3, 4});
+    Tensor<float> k({2, 2, 5, 4});
+    Tensor<float> got({2, 8, 3, 5});
+    Tensor<float> want({2, 8, 3, 5});
+    fill_iota(q, 0.25f);
+    fill_pattern(k);
+
+    attention_qk(q, k, got);
+    Tensor<float> k_exp = expand_kv_heads(k, 8);
+    attention_qk_ref(q, k_exp, want);
+    expect_allclose(got, want);
+}
+
+TEST(AttentionAV, GqaRepeatsKvHeads) {
+    Tensor<float> attn({8, 3, 5});
+    Tensor<float> v({2, 5, 4});
+    Tensor<float> got({8, 3, 4});
+    Tensor<float> want({8, 3, 4});
+    fill_pattern(attn);
+    fill_iota(v, 0.25f);
+
+    attention_av(attn, v, got);
+    Tensor<float> v_exp = expand_kv_heads(v, 8);
+    attention_av_ref(attn, v_exp, want);
+    expect_allclose(got, want);
+}
+
+TEST(AttentionGqa, MatchesExpandedMhaPrefill) {
+    Tensor<float> q({8, 6, 4});
+    Tensor<float> k({2, 6, 4});
+    Tensor<float> v({2, 6, 4});
+    Tensor<float> got({8, 6, 4});
+    Tensor<float> want({8, 6, 4});
+    fill_pattern(q);
+    fill_iota(k, 0.1f);
+    fill_iota(v, -0.3f);
+
+    attention(q, k, v, got, /*causal=*/true);
+    attention_gqa_ref(q, k, v, want, true);
+    expect_allclose(got, want, 2e-5f);
+}
+
+TEST(AttentionGqa, NonCausalDiffersFromCausalPrefill) {
+    Tensor<float> q({4, 5, 8});
+    Tensor<float> k({2, 5, 8});
+    Tensor<float> v({2, 5, 8});
+    Tensor<float> causal({4, 5, 8});
+    Tensor<float> full({4, 5, 8});
+    fill_iota(q, 0.4f);
+    fill_pattern(k);
+    fill_iota(v, -1.1f);
+
+    attention(q, k, v, causal, /*causal=*/true);
+    attention(q, k, v, full, /*causal=*/false);
+
+    bool differs = false;
+    for (size_t i = 0; i < causal.size(); ++i) {
+        if (std::abs(causal[i] - full[i]) > kTol) {
+            differs = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(differs);
+}
+
+TEST(AttentionGqa, Mqa) {
+    Tensor<float> q({4, 5, 8});
+    Tensor<float> k({1, 5, 8});
+    Tensor<float> v({1, 5, 8});
+    Tensor<float> got({4, 5, 8});
+    Tensor<float> want({4, 5, 8});
+    fill_pattern(q);
+    fill_iota(k, -0.2f);
+    fill_iota(v, 0.7f);
+
+    attention(q, k, v, got, /*causal=*/true);
+    attention_gqa_ref(q, k, v, want, true);
+    expect_allclose(got, want, 2e-5f);
+}
+
+TEST(AttentionGqa, BatchedPrefill) {
+    Tensor<float> q({3, 8, 4, 8});
+    Tensor<float> k({3, 2, 4, 8});
+    Tensor<float> v({3, 2, 4, 8});
+    Tensor<float> got({3, 8, 4, 8});
+    Tensor<float> want({3, 8, 4, 8});
+    fill_iota(q, 0.15f);
+    fill_pattern(k);
+    fill_iota(v, -0.55f);
+
+    attention(q, k, v, got, /*causal=*/true);
+    attention_gqa_ref(q, k, v, want, true);
+    expect_allclose(got, want, 2e-5f);
+}
+
+TEST(AttentionGqa, GroupSharesKvHead) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({2, 3, 4});
+    Tensor<float> scores({8, 3, 3});
+    fill_iota(q, 1.0f);
+    fill_pattern(k);
+
+    // Heads 0 and 1 are in the same group (group size 4).
+    for (size_t i = 0; i < 3; ++i) {
+        for (size_t t = 0; t < 4; ++t) {
+            q.at({1, i, t}) = q.at({0, i, t});
+        }
+    }
+    attention_qk(q, k, scores);
+    for (size_t i = 0; i < 3; ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+            EXPECT_NEAR(scores.at({0, i, j}), scores.at({1, i, j}), kTol);
+        }
+    }
+
+    // Head 4 is the first head of the second KV group — different K.
+    bool differs = false;
+    for (size_t i = 0; i < 3 && !differs; ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+            if (std::abs(scores.at({0, i, j}) - scores.at({4, i, j})) > kTol) {
+                differs = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(differs);
+}
+
+TEST(AttentionGqa, DecodeSingleQuery) {
+    Tensor<float> q({8, 1, 4});
+    Tensor<float> k({2, 6, 4});
+    Tensor<float> v({2, 6, 4});
+    Tensor<float> got_causal({8, 1, 4});
+    Tensor<float> got_full({8, 1, 4});
+    Tensor<float> want({8, 1, 4});
+    fill_iota(q, 1.0f);
+    fill_pattern(k);
+    fill_iota(v, 0.5f);
+
+    attention(q, k, v, got_causal, /*causal=*/true);
+    attention(q, k, v, got_full, /*causal=*/false);
+    attention_gqa_ref(q, k, v, want, true);
+
+    expect_allclose(got_causal, want, 2e-5f);
+    expect_allclose(got_causal, got_full, 2e-5f);
+}
+
+TEST(AttentionGqa, PrefillLastRowEqualsDecode) {
+    const size_t n_q = 8;
+    const size_t n_kv = 2;
+    const size_t seq = 6;
+    const size_t d = 4;
+    Tensor<float> q({n_q, seq, d});
+    Tensor<float> k({n_kv, seq, d});
+    Tensor<float> v({n_kv, seq, d});
+    Tensor<float> prefill({n_q, seq, d});
+    fill_pattern(q);
+    fill_iota(k, 0.25f);
+    fill_iota(v, -1.0f);
+
+    attention(q, k, v, prefill, /*causal=*/true);
+
+    Tensor<float> q_dec({n_q, 1, d});
+    Tensor<float> got({n_q, 1, d});
+    copy_query_at(q, seq - 1, q_dec);
+    attention(q_dec, k, v, got, /*causal=*/true);
+
+    for (size_t h = 0; h < n_q; ++h) {
+        for (size_t t = 0; t < d; ++t) {
+            EXPECT_NEAR(got.at({h, 0, t}), prefill.at({h, seq - 1, t}), 2e-5f) << "h=" << h;
+        }
+    }
+}
+
+TEST(AttentionGqa, PrefillEveryPositionEqualsDecode) {
+    const size_t n_q = 8;
+    const size_t n_kv = 2;
+    const size_t seq = 5;
+    const size_t d = 8;
+    Tensor<float> q({n_q, seq, d});
+    Tensor<float> k({n_kv, seq, d});
+    Tensor<float> v({n_kv, seq, d});
+    Tensor<float> prefill({n_q, seq, d});
+    fill_iota(q, 0.1f);
+    fill_pattern(k);
+    fill_iota(v, -0.4f);
+
+    attention(q, k, v, prefill, /*causal=*/true);
+
+    for (size_t pos = 0; pos < seq; ++pos) {
+        Tensor<float> q_dec({n_q, 1, d});
+        Tensor<float> k_pref({n_kv, pos + 1, d});
+        Tensor<float> v_pref({n_kv, pos + 1, d});
+        Tensor<float> got({n_q, 1, d});
+        copy_query_at(q, pos, q_dec);
+        copy_seq_prefix(k, k_pref);
+        copy_seq_prefix(v, v_pref);
+
+        attention(q_dec, k_pref, v_pref, got, /*causal=*/true);
+        Tensor<float> want({n_q, 1, d});
+        attention_gqa_ref(q_dec, k_pref, v_pref, want, true);
+        expect_allclose(got, want, 2e-5f);
+
+        for (size_t h = 0; h < n_q; ++h) {
+            for (size_t t = 0; t < d; ++t) {
+                EXPECT_NEAR(got.at({h, 0, t}), prefill.at({h, pos, t}), 2e-5f)
+                    << "h=" << h << " pos=" << pos;
+            }
+        }
+    }
+}
+
+TEST(AttentionGqa, PrefillThenMultiStepDecode) {
+    const size_t n_q = 4;
+    const size_t n_kv = 1;
+    const size_t prompt = 4;
+    const size_t gen = 3;
+    const size_t T = prompt + gen;
+    const size_t d = 4;
+
+    Tensor<float> q_full({n_q, T, d});
+    Tensor<float> k_full({n_kv, T, d});
+    Tensor<float> v_full({n_kv, T, d});
+    fill_pattern(q_full);
+    fill_iota(k_full, 0.3f);
+    fill_iota(v_full, -0.6f);
+
+    Tensor<float> q_prompt(with_seq({n_q, T, d}, prompt));
+    Tensor<float> k_prompt(with_seq({n_kv, T, d}, prompt));
+    Tensor<float> v_prompt(with_seq({n_kv, T, d}, prompt));
+    Tensor<float> prefill(with_seq({n_q, T, d}, prompt));
+    copy_seq_prefix(q_full, q_prompt);
+    copy_seq_prefix(k_full, k_prompt);
+    copy_seq_prefix(v_full, v_prompt);
+    attention(q_prompt, k_prompt, v_prompt, prefill, /*causal=*/true);
+
+    Tensor<float> want_prefill(with_seq({n_q, T, d}, prompt));
+    attention_gqa_ref(q_prompt, k_prompt, v_prompt, want_prefill, true);
+    expect_allclose(prefill, want_prefill, 2e-5f);
+
+    Tensor<float> full({n_q, T, d});
+    attention(q_full, k_full, v_full, full, /*causal=*/true);
+
+    for (size_t i = 0; i < prompt; ++i) {
+        for (size_t h = 0; h < n_q; ++h) {
+            for (size_t t = 0; t < d; ++t) {
+                EXPECT_NEAR(prefill.at({h, i, t}), full.at({h, i, t}), 2e-5f)
+                    << "prompt pos=" << i;
+            }
+        }
+    }
+
+    for (size_t step = 0; step < gen; ++step) {
+        const size_t pos = prompt + step;
+        Tensor<float> q_dec({n_q, 1, d});
+        Tensor<float> k_cache({n_kv, pos + 1, d});
+        Tensor<float> v_cache({n_kv, pos + 1, d});
+        Tensor<float> got({n_q, 1, d});
+        copy_query_at(q_full, pos, q_dec);
+        copy_seq_prefix(k_full, k_cache);
+        copy_seq_prefix(v_full, v_cache);
+        attention(q_dec, k_cache, v_cache, got, /*causal=*/true);
+
+        for (size_t h = 0; h < n_q; ++h) {
+            for (size_t t = 0; t < d; ++t) {
+                EXPECT_NEAR(got.at({h, 0, t}), full.at({h, pos, t}), 2e-5f)
+                    << "decode step=" << step;
+            }
+        }
+    }
+}
+
+TEST(AttentionGqa, BatchedDecode) {
+    Tensor<float> q({2, 8, 1, 4});
+    Tensor<float> k({2, 2, 7, 4});
+    Tensor<float> v({2, 2, 7, 4});
+    Tensor<float> got({2, 8, 1, 4});
+    Tensor<float> want({2, 8, 1, 4});
+    fill_iota(q, 0.9f);
+    fill_pattern(k);
+    fill_iota(v, -0.15f);
+
+    attention(q, k, v, got, /*causal=*/true);
+    attention_gqa_ref(q, k, v, want, true);
+    expect_allclose(got, want, 2e-5f);
+}
+
+TEST(AttentionGqa, ChunkPrefillBottomRight) {
+    Tensor<float> q_full({8, 6, 4});
+    Tensor<float> k({2, 6, 4});
+    Tensor<float> v({2, 6, 4});
+    Tensor<float> prefill({8, 6, 4});
+    fill_iota(q_full, 0.2f);
+    fill_pattern(k);
+    fill_iota(v, -0.8f);
+    attention(q_full, k, v, prefill, /*causal=*/true);
+
+    Tensor<float> q_chunk({8, 2, 4});
+    Tensor<float> got({8, 2, 4});
+    for (size_t h = 0; h < 8; ++h) {
+        for (size_t i = 0; i < 2; ++i) {
+            for (size_t t = 0; t < 4; ++t) {
+                q_chunk.at({h, i, t}) = q_full.at({h, 4 + i, t});
+            }
+        }
+    }
+    attention(q_chunk, k, v, got, /*causal=*/true);
+    for (size_t h = 0; h < 8; ++h) {
+        for (size_t i = 0; i < 2; ++i) {
+            for (size_t t = 0; t < 4; ++t) {
+                EXPECT_NEAR(got.at({h, i, t}), prefill.at({h, 4 + i, t}), 2e-5f);
+            }
+        }
+    }
+}
+
+TEST(AttentionGqa, DifferentValueDim) {
+    Tensor<float> q({8, 4, 8});
+    Tensor<float> k({2, 4, 8});
+    Tensor<float> v({2, 4, 16});
+    Tensor<float> got({8, 4, 16});
+    Tensor<float> want({8, 4, 16});
+    fill_pattern(q);
+    fill_iota(k, 0.05f);
+    fill_iota(v, -0.2f);
+
+    attention(q, k, v, got, /*causal=*/true);
+    attention_gqa_ref(q, k, v, want, true);
+    expect_allclose(got, want, 2e-5f);
+}
+
+TEST(AttentionGqa, CustomScale) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({2, 3, 4});
+    Tensor<float> v({2, 3, 4});
+    Tensor<float> got({8, 3, 4});
+    Tensor<float> want({8, 3, 4});
+    fill_pattern(q);
+    fill_iota(k, -0.2f);
+    fill_iota(v, 1.5f);
+
+    attention(q, k, v, got, /*causal=*/true, /*scale=*/1.0f);
+    attention_gqa_ref(q, k, v, want, true, 1.0f);
+    expect_allclose(got, want, 2e-5f);
+}
+
+TEST(AttentionGqa, AllocatingWrapper) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({2, 3, 4});
+    Tensor<float> v({2, 3, 4});
+    Tensor<float> want({8, 3, 4});
+    fill_iota(q, 0.25f);
+    fill_pattern(k);
+    fill_iota(v, -0.5f);
+
+    Tensor<float> out = attention(q, k, v, /*causal=*/true);
+    EXPECT_EQ(out.shape(), (std::vector<size_t>{8, 3, 4}));
+    attention_gqa_ref(q, k, v, want, true);
+    expect_allclose(out, want, 2e-5f);
+}
+
+TEST(AttentionGqa, LeavesInputsUnchanged) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({2, 3, 4});
+    Tensor<float> v({2, 3, 4});
+    Tensor<float> q_copy({8, 3, 4});
+    Tensor<float> k_copy({2, 3, 4});
+    Tensor<float> v_copy({2, 3, 4});
+    Tensor<float> out({8, 3, 4});
+    fill_pattern(q);
+    fill_iota(k, 0.5f);
+    fill_iota(v, -1.0f);
+    copy_tensor(q, q_copy);
+    copy_tensor(k, k_copy);
+    copy_tensor(v, v_copy);
+
+    attention(q, k, v, out, /*causal=*/true);
+    expect_allclose(q, q_copy);
+    expect_allclose(k, k_copy);
+    expect_allclose(v, v_copy);
+}
+
+TEST(AttentionGqa, NqEqualsNkvIsMha) {
+    Tensor<float> q({4, 3, 8});
+    Tensor<float> k({4, 3, 8});
+    Tensor<float> v({4, 3, 8});
+    Tensor<float> gqa({4, 3, 8});
+    Tensor<float> mha({4, 3, 8});
+    fill_pattern(q);
+    fill_iota(k, 0.1f);
+    fill_iota(v, -0.3f);
+
+    attention(q, k, v, gqa, /*causal=*/true);
+    attention_ref(q, k, v, mha, true);
+    expect_allclose(gqa, mha, 2e-5f);
+}
+
+TEST(AttentionGqa, NqNotDivisibleByNkvThrows) {
+    Tensor<float> q({6, 3, 4});
+    Tensor<float> k({4, 3, 4});
+    Tensor<float> v({4, 3, 4});
+    Tensor<float> out({6, 3, 4});
+    fill_pattern(q);
+    fill_iota(k, 0.1f);
+    fill_iota(v, 0.2f);
+    EXPECT_THROW(attention(q, k, v, out), std::invalid_argument);
+}
+
+TEST(AttentionGqa, KvHeadMismatchThrows) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({2, 3, 4});
+    Tensor<float> v({4, 3, 4});
+    Tensor<float> out({8, 3, 4});
+    EXPECT_THROW(attention(q, k, v, out), std::invalid_argument);
+}
+
+TEST(AttentionGqa, BatchMismatchThrows) {
+    Tensor<float> q({2, 8, 3, 4});
+    Tensor<float> k({3, 2, 3, 4});
+    Tensor<float> v({3, 2, 3, 4});
+    Tensor<float> out({2, 8, 3, 4});
+    EXPECT_THROW(attention(q, k, v, out), std::invalid_argument);
+}
+
+TEST(AttentionGqa, RankMismatchThrows) {
+    Tensor<float> q({8, 3, 4});
+    Tensor<float> k({3, 4});
+    Tensor<float> v({3, 4});
+    Tensor<float> out({8, 3, 4});
+    EXPECT_THROW(attention(q, k, v, out), std::invalid_argument);
 }

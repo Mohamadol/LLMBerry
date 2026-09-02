@@ -126,11 +126,16 @@ def attention(
     """Scaled dot-product attention. Matches PyTorch `F.scaled_dot_product_attention`.
 
     q: [..., seq_q, d], k: [..., seq_k, d], v: [..., seq_k, d_v]
+    GQA: if n_q > n_kv, K/V heads are repeat-interleaved along the head axis.
     Causal mask is bottom-right aligned (decode seq_q=1 sees every key).
     """
     q = np.asarray(q, dtype=np.float32)
     k = np.asarray(k, dtype=np.float32)
     v = np.asarray(v, dtype=np.float32)
+    if q.ndim >= 3 and q.shape[-3] != k.shape[-3]:
+        n_q, n_kv = q.shape[-3], k.shape[-3]
+        k = np.repeat(k, n_q // n_kv, axis=-3)
+        v = np.repeat(v, n_q // v.shape[-3], axis=-3)
     d = q.shape[-1]
     if scale is None:
         scale = 1.0 / np.sqrt(np.float32(d))

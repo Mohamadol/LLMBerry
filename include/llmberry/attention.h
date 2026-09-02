@@ -17,8 +17,10 @@ namespace llmberry {
 ///   out: [..., seq_q, d_v]
 ///
 /// Leading dims are independent heads (and optional batch): e.g. [n_heads, seq, d]
-/// or [batch, n_heads, seq, d]. Leading dims of q, k, and v must match.
-/// Grouped-query attention (n_q != n_kv) is checkpoint 07.
+/// or [batch, n_heads, seq, d].
+/// Grouped-query attention: n_q may exceed n_kv when n_q % n_kv == 0.
+/// Query head h uses KV head h / (n_q / n_kv). Batch dims must still match.
+/// K and V must share the same leading dims (including n_kv).
 ///
 /// Causal masking uses PyTorch `is_causal` bottom-right alignment, so decode
 /// with seq_q=1, seq_k=T attends to every cached key.

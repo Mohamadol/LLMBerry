@@ -20,7 +20,7 @@ make verify
 | `make test-matmul` | Checkpoint 02 kernel tests (matmul, gemv, elemwise, reduce, SiLU, GELU) |
 | `make test-rmsnorm` | Checkpoint 04 RMSNorm tests |
 | `make test-rope` | Checkpoint 05 RoPE tests |
-| `make test-attention` | Checkpoint 06 attention tests (softmax + SDPA) |
+| `make test-attention` | Checkpoint 06–07 attention tests (softmax + SDPA + GQA) |
 | `make verify` | Build (if needed) + full test suite |
 
 ---
@@ -157,11 +157,25 @@ make test-attention
 python3 python/verify_ops.py
 ```
 
-## Checkpoint 07
+## Checkpoint 07 — Grouped-Query Attention
 
-| Checkpoint | Test binary | Gate |
-|------------|-------------|------|
-| 07 GQA | `test_attention` (extended) | GQA head layout correct |
+**Gate:** all tests in `tests/test_attention.cpp` pass (`make test-attention`), including `AttentionGqa.*`.
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| GQA kernels | `AttentionQK.Gqa*`, `AttentionAV.Gqa*` | shared KV heads, batched QK |
+| GQA prefill | `AttentionGqa.MatchesExpandedMhaPrefill`, `Mqa`, `BatchedPrefill` | repeat-interleave ≡ MHA, MQA |
+| GQA decode | `DecodeSingleQuery`, `Prefill*EqualsDecode`, `PrefillThenMultiStepDecode`, `BatchedDecode` | `seq_q=1` vs growing K/V prefix |
+| GQA extras | `GroupSharesKvHead`, `ChunkPrefillBottomRight`, `DifferentValueDim`, `CustomScale` | grouping, `d_v != d` |
+| GQA contract | `AllocatingWrapper`, `LeavesInputsUnchanged`, `NqEqualsNkvIsMha` | MHA still works |
+| GQA errors | `NqNotDivisible*`, `KvHeadMismatch*`, `BatchMismatch*`, `RankMismatch*` | invalid head layout |
+
+**Also:** `python/verify_ops.py` `attention()` repeat-interleaves K/V when `n_q != n_kv`.
+
+```bash
+make test-attention
+python3 python/verify_ops.py
+```
 
 ---
 

@@ -29,13 +29,28 @@ void ensure_same_leading_dims(const Tensor<float>& a, const Tensor<float>& b, co
     }
 }
 
+
+void ensure_gqa_leading_dims(const Tensor<float>& q, const Tensor<float>& kv, const char* msg) {
+    ENSURE(q.ndim() == kv.ndim(), std::invalid_argument, msg);
+    // batch dims (all except last 3) must match exactly
+    for (size_t i = 0; i + 3 < q.ndim(); ++i) {
+        ENSURE(q.shape()[i] == kv.shape()[i], std::invalid_argument, msg);
+    }
+    // head dim: n_q % n_kv == 0 (covers MHA, GQA, and MQA)
+    if (q.ndim() >= 3) {
+        size_t n_q  = q.shape()[q.ndim() - 3];
+        size_t n_kv = kv.shape()[kv.ndim() - 3];
+        ENSURE(n_kv > 0 && n_q % n_kv == 0, std::invalid_argument, msg);
+    }
+}
+
 void check_qk(const Tensor<float>& q, const Tensor<float>& k, const Tensor<float>& scores) {
     ENSURE(!q.empty() && !k.empty(), std::invalid_argument, "attention_qk: q and k cannot be empty");
     ENSURE(q.ndim() >= 2 && k.ndim() >= 2, std::invalid_argument,
            "attention_qk: q and k must have shape [..., seq, d]");
     ENSURE(q.shape().back() == k.shape().back(), std::invalid_argument,
            "attention_qk: q and k head_dim must match");
-    ensure_same_leading_dims(q, k, "attention_qk: leading dims of q and k must match");
+    ensure_gqa_leading_dims(q, k, "attention_qk: leading dims of q and k must match");
     ENSURE(scores.shape() == scores_shape_from(q, k), std::invalid_argument,
            "attention_qk: scores must have shape [..., seq_q, seq_k]");
 }
@@ -47,7 +62,7 @@ void check_av(const Tensor<float>& attn, const Tensor<float>& v, const Tensor<fl
            "attention_av: attn and v must have rank >= 2");
     ENSURE(attn.shape().back() == v.shape()[v.ndim() - 2], std::invalid_argument,
            "attention_av: attn seq_k must match v seq_k");
-    ensure_same_leading_dims(attn, v, "attention_av: leading dims of attn and v must match");
+    ensure_gqa_leading_dims(attn, v, "attention_av: batch dims of attn and v must match");
     ENSURE(out.shape() == output_shape_from(attn, v), std::invalid_argument,
            "attention_av: out must have shape [..., seq_q, d_v]");
 }
@@ -64,8 +79,11 @@ void check_attention(const Tensor<float>& q,
            "attention: q and k head_dim must match");
     ENSURE(k.shape()[k.ndim() - 2] == v.shape()[v.ndim() - 2], std::invalid_argument,
            "attention: k and v seq_k must match");
-    ensure_same_leading_dims(q, k, "attention: leading dims of q and k must match");
-    ensure_same_leading_dims(q, v, "attention: leading dims of q and v must match");
+    
+    ensure_gqa_leading_dims(q, k, "attention: batch dims of q and k must match.");
+    ensure_gqa_leading_dims(q, v, "attention: batch dims of q and v must match");
+    ensure_same_leading_dims(k, v, "attention: leading dims of k and v must match");
+
     ENSURE(out.shape() == output_shape_from(q, v), std::invalid_argument,
            "attention: out must have shape [..., seq_q, d_v]");
 }
@@ -78,14 +96,18 @@ void attention_qk(const Tensor<float>& q, const Tensor<float>& k, Tensor<float>&
     const size_t seq_q = q.shape()[q.ndim() - 2];
     const size_t d = q.shape().back();
     const size_t seq_k = k.shape()[k.ndim() - 2];
-    const size_t matrix_size = seq_q * d;
-    const size_t n_heads = q.size() / matrix_size;
+    const size_t n_q_heads  = (q.ndim() >= 3) ? q.shape()[q.ndim() - 3] : 1;
+    const size_t n_kv_heads = (k.ndim() >= 3) ? k.shape()[k.ndim() - 3] : 1;
+    const size_t group = n_q_heads / n_kv_heads;
+    const size_t total_q = q.size() / (seq_q * d);
 
-    for (size_t h = 0; h < n_heads; ++h) {
-       Tensor<float> out_h = scores.matrix(h);
-       matmul(q.matrix(h), k.matrix(h).transpose(), out_h);
+    for (size_t h = 0; h < total_q; ++h) {
+        size_t batch_idx = h / n_q_heads;
+        size_t q_head    = h % n_q_heads;
+        size_t kv_flat   = batch_idx * n_kv_heads + q_head / group;
+        Tensor<float> out_h = scores.matrix(h);
+        matmul(q.matrix(h), k.matrix(kv_flat).transpose(), out_h);
     }
-
 }
 
 void attention_scale(Tensor<float>& scores, float scale) {
@@ -129,13 +151,20 @@ void attention_av(const Tensor<float>& attn, const Tensor<float>& v, Tensor<floa
 
     const size_t seq_q = attn.shape()[attn.ndim() - 2];
     const size_t seq_k = attn.shape().back();
-    const size_t d_v = v.shape().back();
-    const size_t n_heads = v.size() / (seq_k * d_v);
+    const size_t n_q_heads  = (attn.ndim() >= 3) ? attn.shape()[attn.ndim() - 3] : 1;
+    const size_t total_q    = attn.size() / (seq_q * seq_k);
 
-       for(size_t h=0; h < n_heads; h++){
-              Tensor<float> out_tensor = out.matrix(h);
-              matmul(attn.matrix(h), v.matrix(h), out_tensor);
-       }
+    const size_t d_v        = v.shape().back();
+    const size_t n_kv_heads = (v.ndim() >= 3) ? v.shape()[v.ndim() - 3] : 1;
+    const size_t group      = n_q_heads / n_kv_heads;
+
+    for (size_t h = 0; h < total_q; ++h) {
+        size_t batch_idx = h / n_q_heads;
+        size_t q_head    = h % n_q_heads;
+        size_t kv_flat   = batch_idx * n_kv_heads + q_head / group;
+        Tensor<float> out_h = out.matrix(h);
+        matmul(attn.matrix(h), v.matrix(kv_flat), out_h);
+    }
 }
 
 void attention(const Tensor<float>& q,

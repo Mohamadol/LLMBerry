@@ -199,7 +199,7 @@ Start with standard multi-head attention.
 
 ---
 
-### [ ] 07 — Grouped-Query Attention
+### [x] 07 — Grouped-Query Attention
 
 Extend the attention implementation to support **Grouped-Query Attention (GQA)** used by modern Llama models.
 
