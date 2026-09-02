@@ -132,21 +132,23 @@ python3 python/verify_ops.py
 
 ## 05 — Rotary Positional Embeddings
 
-**Status:** Scaffold ready — implement frequencies, sincos tables, and apply
+**Status:** Complete
 
-**Scaffold:**
-- API: `rope_freqs`, `rope_sincos`, `rope` in `include/llmberry/kernels.h`
-- Stub + shape checks: `kernels/rope.cpp` (throws `logic_error` until filled in)
-- Sequential `rope_sincos` and convenience `rope(x, out, offset)` are glue — they call the three TODOs
-- Tests: `tests/test_rope.cpp` (independent C++ reference, Llama / GPT-NeoX `rotate_half`)
-- Python ref: `python/verify_ops.py` `rope_freqs()`, `rope_sincos()`, `rope()`
+**Completed:**
+- Llama / GPT-NeoX RoPE: `y = x * cos + rotate_half(x) * sin`
+- Frequencies: `inv_freq[i] = 1 / theta^(2i / dim)` (`rope_freqs`)
+- Sin/cos tables: concat(freqs, freqs) then cos/sin (`rope_sincos`)
+- Apply over `[seq, ..., head_dim]` via `Tensor::row`; broadcast tables across heads
+- Sequential convenience `rope(x, out, offset)` plus arbitrary positions
+- C++ tests vs independent reference; NumPy/HF reference in `python/verify_ops.py`
 
-**Implement** (delete each `throw` in `kernels/rope.cpp`):
-1. `rope_freqs` — `inv_freq[i] = 1 / theta^(2i / dim)`
-2. `rope_sincos(inv_freq, positions, cos, sin)` — concat(freqs, freqs) then cos/sin
-3. `rope(x, cos, sin, out)` — `y = x * cos + rotate_half(x) * sin`
+**Tests:**
+- `test_rope`: 20/20 passing (`make test-rope`)
 
-Layout: `x` is `[seq, ..., head_dim]` (dim 0 = sequence, last dim even). Decode: seq=1 with `position_offset` = cache length. Default theta = 10000.
+**Notes:**
+- Default `theta` is 10000 (Llama 1/2). Llama 3 uses 500000.
+- Dim 0 is sequence; last dim is even `head_dim`. Decode uses seq=1 with `position_offset` = cache length.
+- Position 0 is identity; rotation preserves per-vector L2 norm.
 
 **Verify:**
 
@@ -233,16 +235,29 @@ python3 python/verify_ops.py
 
 ## 08 — SwiGLU MLP
 
-**Status:** Not started
+**Status:** Scaffold ready — implement SwiGLU glue (`silu(x @ W_g) * (x @ W_u)` then `@ W_d`)
+
+**Scaffold:**
+- API: `mlp` in `include/llmberry/mlp.h`
+- Stub + shape checks: `src/mlp.cpp` (throws `logic_error` until filled in)
+- Allocating wrapper is glue — it calls the in-place `mlp`
+- Tests: `tests/test_mlp.cpp` (independent C++ reference, token-wise dots)
+- Python ref: `python/verify_ops.py` `mlp()`
+
+**Implement** (delete the `throw` in `src/mlp.cpp`):
+1. Flatten `x` / `out` to `[tokens, hidden]` (`view`)
+2. `gate = x @ w_gate`, `up = x @ w_up` (`matmul`)
+3. `h = silu(gate) * up` (`silu`, `mul`)
+4. `out = h @ w_down` (`matmul`)
+
+Layout: `w_gate` / `w_up` are `[hidden, intermediate]`, `w_down` is `[intermediate, hidden]`. No bias. Decode: `x` shape `[hidden]` or `[1, hidden]`.
 
 **Verify:**
 
 ```bash
-make build
-make test-matmul
+make test-mlp
+python3 python/verify_ops.py
 ```
-
-(Add a dedicated MLP test binary when the op exists.)
 
 ---
 
