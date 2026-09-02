@@ -246,7 +246,7 @@ Tasks:
 
 ---
 
-### [ ] 09 — Transformer Block
+### [x] 09 — Transformer Block
 
 Combine the implemented components into one complete Llama Transformer layer.
 

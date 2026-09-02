@@ -12,13 +12,15 @@ TEST_MATMUL     := $(BUILD_DIR)/tests/test_matmul
 TEST_RMSNORM    := $(BUILD_DIR)/tests/test_rmsnorm
 TEST_ROPE       := $(BUILD_DIR)/tests/test_rope
 TEST_ATTENTION  := $(BUILD_DIR)/tests/test_attention
-TEST_MLP        := $(BUILD_DIR)/tests/test_mlp
+TEST_MLP          := $(BUILD_DIR)/tests/test_mlp
+TEST_TRANSFORMER  := $(BUILD_DIR)/tests/test_transformer
 DUMP_OPS        := $(BUILD_DIR)/tests/dump_ops
 LLMBERRY        := $(BUILD_DIR)/llmberry
+PYTHON          := $(shell if [ -x "$(CURDIR)/.venv/bin/python" ]; then echo "$(CURDIR)/.venv/bin/python"; else echo python3; fi)
 
 .PHONY: help setup build clean test verify test-tensor test-tensor-construction \
         test-tensor-indexing test-tensor-views test-matmul test-rmsnorm test-rope \
-        test-attention test-mlp verify-ops benchmark run
+        test-attention test-mlp test-transformer verify-ops python-deps benchmark run
 
 help:
 	@echo "LLMBerry commands:"
@@ -35,6 +37,8 @@ help:
 	@echo "  make test-rope              Run checkpoint 05 RoPE tests"
 	@echo "  make test-attention         Run checkpoint 06 attention tests"
 	@echo "  make test-mlp               Run checkpoint 08 SwiGLU MLP tests"
+	@echo "  make test-transformer       Run checkpoint 09 Transformer block tests"
+	@echo "  make python-deps            Create .venv and install NumPy + PyTorch"
 	@echo "  make verify-ops             C++ dump_ops vs NumPy (and PyTorch if installed)"
 	@echo "  make benchmark              Run benchmark binaries"
 	@echo "  make run                    Run llmberry CLI"
@@ -43,6 +47,11 @@ help:
 setup:
 	@$(CMAKE) -B $(BUILD_DIR) -G "$(GENERATOR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 	@$(CMAKE) --build $(BUILD_DIR) -j$(NPROC)
+
+python-deps:
+	@test -x .venv/bin/python || python3 -m venv .venv
+	@.venv/bin/pip install -q -r python/requirements.txt
+	@echo "Python deps installed. Run: .venv/bin/python python/test_transformer_pytorch.py"
 
 build:
 	@test -d $(BUILD_DIR) || $(MAKE) setup
@@ -100,10 +109,16 @@ test-mlp:
 	@$(CMAKE) --build $(BUILD_DIR) --target test_mlp -j$(NPROC)
 	@$(TEST_MLP)
 
+test-transformer:
+	@test -d $(BUILD_DIR) || $(MAKE) setup
+	@$(CMAKE) --build $(BUILD_DIR) --target test_transformer dump_ops -j$(NPROC)
+	@$(TEST_TRANSFORMER)
+	@$(PYTHON) python/test_transformer_pytorch.py --bin $(DUMP_OPS)
+
 verify-ops:
 	@test -d $(BUILD_DIR) || $(MAKE) setup
 	@$(CMAKE) --build $(BUILD_DIR) --target dump_ops -j$(NPROC)
-	@python3 python/verify_ops.py --bin $(DUMP_OPS)
+	@$(PYTHON) python/verify_ops.py --bin $(DUMP_OPS)
 
 benchmark:
 	@test -x $(BUILD_DIR)/benchmarks/benchmark_matmul || $(MAKE) build

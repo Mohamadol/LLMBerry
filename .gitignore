@@ -1,9 +1,30 @@
+# C++ / CMake
 build/
-.cache/
 compile_commands.json
-.DS_Store
 *.o
 *.a
 *.so
 *.dylib
+*.dSYM/
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Tooling / OS
+.cache/
 results/
+.DS_Store

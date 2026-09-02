@@ -6,6 +6,7 @@
 
 #include <iomanip>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -28,11 +29,33 @@ using llmberry::rope_sincos;
 using llmberry::silu;
 using llmberry::softmax;
 using llmberry::Tensor;
+using llmberry::Transformer;
+using llmberry::TransformerConfig;
 
 void fill_arange(Tensor<float>& t, float start = 1.0f) {
     for (size_t i = 0; i < t.size(); ++i) {
         t[i] = start + static_cast<float>(i);
     }
+}
+
+void fill_uniform(Tensor<float>& t, std::mt19937& rng, float lo, float hi) {
+    std::uniform_real_distribution<float> dist(lo, hi);
+    for (size_t i = 0; i < t.size(); ++i) {
+        t[i] = dist(rng);
+    }
+}
+
+void randomize_block(Transformer& block, std::mt19937& rng) {
+    auto& w = block.weights();
+    fill_uniform(w.attn_norm, rng, 0.5f, 1.5f);
+    fill_uniform(w.w_q, rng, -0.2f, 0.2f);
+    fill_uniform(w.w_k, rng, -0.2f, 0.2f);
+    fill_uniform(w.w_v, rng, -0.2f, 0.2f);
+    fill_uniform(w.w_o, rng, -0.2f, 0.2f);
+    fill_uniform(w.ffn_norm, rng, 0.5f, 1.5f);
+    fill_uniform(w.w_gate, rng, -0.2f, 0.2f);
+    fill_uniform(w.w_up, rng, -0.2f, 0.2f);
+    fill_uniform(w.w_down, rng, -0.2f, 0.2f);
 }
 
 void fill_eye(Tensor<float>& t) {
@@ -335,6 +358,118 @@ int main() {
         write_tensor(os, y);
         os << "}";
         push(os.str());
+    }
+
+    auto dump_transformer = [&](const char* name, Transformer& block, const Tensor<float>& x,
+                                size_t position_offset = 0) {
+        Tensor<float> y = block.forward(x, position_offset);
+        const auto& w = block.weights();
+        const auto& c = block.config();
+        std::ostringstream os;
+        os << "{\"name\":\"" << name << "\",\"inputs\":{";
+        write_named_tensor(os, "x", x, false);
+        write_named_tensor(os, "attn_norm", w.attn_norm, true);
+        write_named_tensor(os, "w_q", w.w_q, true);
+        write_named_tensor(os, "w_k", w.w_k, true);
+        write_named_tensor(os, "w_v", w.w_v, true);
+        write_named_tensor(os, "w_o", w.w_o, true);
+        write_named_tensor(os, "ffn_norm", w.ffn_norm, true);
+        write_named_tensor(os, "w_gate", w.w_gate, true);
+        write_named_tensor(os, "w_up", w.w_up, true);
+        write_named_tensor(os, "w_down", w.w_down, true);
+        os << "},\"attrs\":{\"n_heads\":" << c.n_heads << ",\"n_kv_heads\":" << c.n_kv_heads
+           << ",\"position_offset\":" << position_offset << ",\"theta\":" << c.rope_theta
+           << ",\"eps\":" << c.rms_eps << "},\"output\":";
+        write_tensor(os, y);
+        os << "}";
+        push(os.str());
+    };
+
+    {
+        TransformerConfig cfg;
+        cfg.hidden = 4;
+        cfg.n_heads = 2;
+        cfg.n_kv_heads = 2;
+        cfg.intermediate = 6;
+        Transformer block(cfg);
+        fill_arange(block.weights().attn_norm, 0.5f);
+        fill_arange(block.weights().w_q, 0.01f);
+        fill_arange(block.weights().w_k, -0.02f);
+        fill_arange(block.weights().w_v, 0.03f);
+        fill_arange(block.weights().w_o, -0.04f);
+        fill_arange(block.weights().ffn_norm, 0.6f);
+        fill_arange(block.weights().w_gate, 0.05f);
+        fill_arange(block.weights().w_up, -0.06f);
+        fill_arange(block.weights().w_down, 0.07f);
+        Tensor<float> x({3, 4});
+        fill_arange(x, -1.0f);
+        dump_transformer("transformer", block, x);
+    }
+
+    {
+        TransformerConfig cfg;
+        cfg.hidden = 8;
+        cfg.n_heads = 4;
+        cfg.n_kv_heads = 2;
+        cfg.intermediate = 5;
+        Transformer block(cfg);
+        fill_arange(block.weights().attn_norm, 0.4f);
+        fill_arange(block.weights().w_q, 0.01f);
+        fill_arange(block.weights().w_k, -0.02f);
+        fill_arange(block.weights().w_v, 0.03f);
+        fill_arange(block.weights().w_o, -0.04f);
+        fill_arange(block.weights().ffn_norm, 0.5f);
+        fill_arange(block.weights().w_gate, 0.05f);
+        fill_arange(block.weights().w_up, -0.06f);
+        fill_arange(block.weights().w_down, 0.07f);
+        Tensor<float> x({2, 3, 8});
+        fill_arange(x, -2.0f);
+        dump_transformer("transformer_gqa", block, x);
+    }
+
+    {
+        std::mt19937 rng(42);
+        struct RandomCase {
+            const char* name;
+            size_t hidden;
+            size_t n_heads;
+            size_t n_kv_heads;
+            size_t intermediate;
+            size_t position_offset;
+            std::vector<size_t> x_shape;
+        };
+        const RandomCase cases[] = {
+            // Tiny (fast)
+            {"transformer_random_0", 8, 4, 4, 16, 0, {4, 8}},
+            {"transformer_random_1", 8, 4, 2, 12, 0, {3, 8}},
+            {"transformer_random_2", 8, 4, 2, 12, 5, {8}},
+            {"transformer_random_3", 8, 4, 2, 16, 0, {2, 3, 8}},
+            {"transformer_random_4", 4, 2, 2, 8, 1, {5, 4}},
+            // Mini Llama-3 GQA (32:8 → 4:1), head_dim=64, intermediate ≈ 3.5×H
+            {"transformer_real_0", 256, 4, 1, 896, 0, {8, 256}},
+            // Decode, RoPE offset as if KV cache already has 17 tokens
+            {"transformer_real_1", 256, 4, 1, 896, 17, {256}},
+            // Mini Llama-2 MHA, head_dim=64
+            {"transformer_real_2", 256, 4, 4, 688, 0, {16, 256}},
+            // Larger GQA (Llama 3 8B 32:8), head_dim=64
+            {"transformer_real_3", 512, 8, 2, 1792, 0, {8, 512}},
+            // Batched prefill
+            {"transformer_real_4", 256, 4, 1, 896, 0, {2, 8, 256}},
+            // Llama-2/3 7B–8B head_dim=128
+            {"transformer_real_5", 256, 2, 2, 688, 0, {8, 256}},
+        };
+        for (const auto& c : cases) {
+            TransformerConfig cfg;
+            cfg.hidden = c.hidden;
+            cfg.n_heads = c.n_heads;
+            cfg.n_kv_heads = c.n_kv_heads;
+            cfg.intermediate = c.intermediate;
+            Transformer block(cfg);
+            randomize_block(block, rng);
+            Tensor<float> x(c.x_shape);
+            fill_uniform(x, rng, -1.0f, 1.0f);
+            dump_transformer(c.name, block, x, c.position_offset);
+        }
     }
 
     std::cout << "{\"ops\":[";

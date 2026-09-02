@@ -22,6 +22,7 @@ make verify
 | `make test-rope` | Checkpoint 05 RoPE tests |
 | `make test-attention` | Checkpoint 06–07 attention tests (softmax + SDPA + GQA) |
 | `make test-mlp` | Checkpoint 08 SwiGLU MLP tests |
+| `make test-transformer` | Checkpoint 09 Transformer block tests |
 | `make verify-ops` | C++ `dump_ops` vs NumPy (PyTorch too if installed) |
 | `make verify` | Build (if needed) + full test suite (includes `verify_ops`) |
 
@@ -200,6 +201,34 @@ python3 python/verify_ops.py
 ```bash
 make test-mlp
 python3 python/verify_ops.py
+```
+
+---
+
+## Checkpoint 09 — Transformer Block
+
+**Gate:** all tests in `tests/test_transformer.cpp` pass (`make test-transformer`).
+
+| Group | Filter | Covers |
+|-------|--------|--------|
+| Config / weights | `AllocatesWeightShapes`, `GqaAllocatesSmallerKv` | dims imply tensor shapes, GQA KV |
+| Errors | `InvalidConfigThrows`, `WeightShapeMismatchThrows`, `ShapeMismatchThrows`, `EmptyThrows` | heads, even `head_dim`, ranks |
+| Algebra | `ZeroProjectionsIsIdentity` | `W_o = W_d = 0` → residual identity |
+| Known values | `KnownValuesTiny` | seq=1, identity QKV/O, RoPE pos 0, zero MLP |
+| Causal | `PrefillLastRowEqualsPrefix` | `block(x)[t] == block(x[:t+1])[-1]` |
+| Decode | `DecodeMatchesPrefillSeq1` | `[hidden]` ≡ `[1, hidden]` |
+| Reference | `MatchesIndependentReference` | 1-D / 2-D / GQA batch vs C++ glue ref |
+| Realistic | `RealisticMiniLlama*`, `RealisticHeadDim128*`, `RealisticGqaPrefill*` | `head_dim` 64/128, GQA 4:1, seq 8–16 |
+| PyTorch | `python/test_transformer_pytorch.py` | 5 tiny + 6 Llama-like random cases vs `LlamaDecoderBlock` |
+| Contract | `Overwrites*`, `LeavesInputs*`, `AllocatingWrapper` | in-place out, no input mutation |
+| Layout | `ContiguousReshapeView` | view sharing storage |
+
+**Also:** `python/verify_ops.py` `transformer()` matches NumPy; HF Linear weights are `[out, in]` — pass `W.T`. `dump_ops` includes `transformer`, `transformer_gqa`, five `transformer_random_*` (tiny), and six `transformer_real_*` cases (head_dim 64/128, GQA 4:1, decode, batch). `make test-transformer` also runs those against a PyTorch `LlamaDecoderBlock`.
+
+```bash
+make test-transformer
+python3 python/verify_ops.py
+python3 python/test_transformer_pytorch.py
 ```
 
 ---

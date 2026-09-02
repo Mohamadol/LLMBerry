@@ -178,6 +178,77 @@ def mlp(
     return hidden @ w_down
 
 
+def transformer(
+    x: np.ndarray,
+    attn_norm: np.ndarray,
+    w_q: np.ndarray,
+    w_k: np.ndarray,
+    w_v: np.ndarray,
+    w_o: np.ndarray,
+    ffn_norm: np.ndarray,
+    w_gate: np.ndarray,
+    w_up: np.ndarray,
+    w_down: np.ndarray,
+    n_heads: int,
+    n_kv_heads: int,
+    position_offset: int = 0,
+    theta: float = 10000.0,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """Llama decoder layer. Matches C++ `Transformer::forward`.
+
+    Compute-native weights (HF Linear is [out, in]; pass W.T).
+    x: [hidden], [seq, hidden], or [batch, seq, hidden]
+    """
+    x = np.asarray(x, dtype=np.float32)
+    if x.ndim == 3:
+        return np.stack(
+            [
+                transformer(
+                    x[b],
+                    attn_norm,
+                    w_q,
+                    w_k,
+                    w_v,
+                    w_o,
+                    ffn_norm,
+                    w_gate,
+                    w_up,
+                    w_down,
+                    n_heads,
+                    n_kv_heads,
+                    position_offset,
+                    theta,
+                    eps,
+                )
+                for b in range(x.shape[0])
+            ],
+            axis=0,
+        )
+    squeezed = False
+    if x.ndim == 1:
+        x = x[None, :]
+        squeezed = True
+    seq, hidden = x.shape
+    head_dim = hidden // n_heads
+    xn = rmsnorm(x, attn_norm, eps)
+    q = rope((xn @ w_q).reshape(seq, n_heads, head_dim), position_offset, theta)
+    k = rope((xn @ w_k).reshape(seq, n_kv_heads, head_dim), position_offset, theta)
+    v = (xn @ w_v).reshape(seq, n_kv_heads, head_dim)
+    attn = attention(
+        np.transpose(q, (1, 0, 2)),
+        np.transpose(k, (1, 0, 2)),
+        np.transpose(v, (1, 0, 2)),
+        causal=True,
+    )
+    attn_out = np.transpose(attn, (1, 0, 2)).reshape(seq, n_heads * head_dim) @ w_o
+    h = x + attn_out
+    y = h + mlp(rmsnorm(h, ffn_norm, eps), w_gate, w_up, w_down)
+    if squeezed:
+        return y[0]
+    return y
+
+
 def tensor_from_json(obj: dict) -> np.ndarray:
     return np.asarray(obj["data"], dtype=np.float32).reshape(obj["shape"])
 
@@ -236,6 +307,24 @@ def numpy_ref(op: dict):
         )
     if name in ("mlp", "mlp_batched"):
         return mlp(inp["x"], inp["w_gate"], inp["w_up"], inp["w_down"])
+    if name.startswith("transformer"):
+        return transformer(
+            inp["x"],
+            inp["attn_norm"],
+            inp["w_q"],
+            inp["w_k"],
+            inp["w_v"],
+            inp["w_o"],
+            inp["ffn_norm"],
+            inp["w_gate"],
+            inp["w_up"],
+            inp["w_down"],
+            int(attrs["n_heads"]),
+            int(attrs["n_kv_heads"]),
+            int(attrs.get("position_offset", 0)),
+            float(attrs.get("theta", 10000.0)),
+            float(attrs.get("eps", 1e-6)),
+        )
     raise KeyError(f"unknown op {name}")
 
 
@@ -291,6 +380,27 @@ def torch_ref(op: dict):
         x, wg, wu, wd = inp["x"], inp["w_gate"], inp["w_up"], inp["w_down"]
         h = F.silu(x @ wg) * (x @ wu)
         return (h @ wd).numpy()
+    if name.startswith("transformer"):
+        from llama_block_torch import llama_decoder_block
+
+        np_inp = inputs_from_json(op)
+        return llama_decoder_block(
+            np_inp["x"],
+            np_inp["attn_norm"],
+            np_inp["w_q"],
+            np_inp["w_k"],
+            np_inp["w_v"],
+            np_inp["w_o"],
+            np_inp["ffn_norm"],
+            np_inp["w_gate"],
+            np_inp["w_up"],
+            np_inp["w_down"],
+            int(attrs["n_heads"]),
+            int(attrs["n_kv_heads"]),
+            int(attrs.get("position_offset", 0)),
+            float(attrs.get("theta", 10000.0)),
+            float(attrs.get("eps", 1e-6)),
+        )
     if name in ("rope", "rope_freqs", "rope_sincos"):
         return None  # no torch.nn RoPE; NumPy matches HF rotate_half
     raise KeyError(f"unknown op {name}")

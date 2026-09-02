@@ -4,5 +4,6 @@
 #include "llmberry/kernels.h"
 #include "llmberry/mlp.h"
 #include "llmberry/tensor.h"
+#include "llmberry/transformer.h"
 
 // Umbrella header for consumers of the library.

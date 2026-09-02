@@ -20,6 +20,7 @@ make test-rmsnorm # checkpoint 04
 make test-rope    # checkpoint 05
 make test-attention # checkpoint 06–07
 make test-mlp       # checkpoint 08
+make test-transformer  # checkpoint 09
 make verify-ops     # C++ vs NumPy (dump_ops)
 make run         # llmberry CLI
 ```

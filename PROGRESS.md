@@ -262,13 +262,29 @@ python3 python/verify_ops.py
 
 ## 09 — Transformer Block
 
-**Status:** Not started
+**Status:** Complete
+
+**Completed:**
+- `Transformer` class owns `TransformerConfig` (hidden, heads, GQA, intermediate, RoPE theta, RMS eps) and layer `Weights`
+- Constructor allocates zero-filled tensors from config, or takes already-shaped weights
+- Forward: RMSNorm → QKV + RoPE + causal GQA attention → residual → RMSNorm → SwiGLU MLP → residual
+- RoPE layout `[seq, heads, d]` is permuted to attention layout `[heads, seq, d]` and back
+- Decode `[hidden]`, prefill `[seq, hidden]`, batch `[batch, seq, hidden]`
+- C++ tests vs independent glue reference; NumPy reference in `python/verify_ops.py`
+
+**Tests:**
+- `test_transformer`: 15 tests (`make test-transformer`)
+
+**Notes:**
+- Compute-native weights (HF Linear is `[out, in]` — transpose at load, checkpoint 10).
+- No KV cache yet (checkpoint 13). Decode with `position_offset` still recomputes K/V for the tokens passed in.
+- `Model` (checkpoint 11) will stack `N` of these layers.
 
 **Verify:**
 
 ```bash
-make build
-# layer-level gtest once added, e.g. ./build/tests/test_transformer
+make test-transformer
+python3 python/verify_ops.py
 ```
 
 ---
